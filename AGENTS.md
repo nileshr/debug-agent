@@ -1,6 +1,6 @@
 # debug-agent — agent context
 
-TypeScript CLI that speaks **Cursor ACP** (`agent acp`, JSON-RPC over stdio) to run a multi-phase bug-fix loop emulating IDE Debug Mode.
+TypeScript CLI (`debug` / `debug-agent` bins) that speaks **Cursor ACP** (`agent acp`, JSON-RPC over stdio) to run a multi-phase debug loop emulating IDE Debug Mode.
 
 ## Layout
 
@@ -14,8 +14,8 @@ TypeScript CLI that speaks **Cursor ACP** (`agent acp`, JSON-RPC over stdio) to 
 | `src/mcp/chrome.ts` | Ensures `chrome-devtools` in repo `.cursor/mcp.json`; ACP uses `mcpServers: []` |
 | `src/permissions.ts` | Auto-allow repo + chrome-devtools tools |
 | `src/report/` | Self-contained HTML → `~/.debug-agent/reports/` |
-| `src/cli.ts` | `bugfix` entrypoint |
-| `scripts/smoke-*.mjs` | ACP + report smoke tests |
+| `src/setup/` | `debug setup` prerequisite checks |
+| `src/cli.ts` | CLI entry (`debug`, subcommands `setup` / `run`) |
 
 ## ACP facts (verified)
 
@@ -39,22 +39,22 @@ npm run build
 npm run typecheck
 npm run smoke:acp
 npm run smoke:report
-bugfix setup [--repo <path>]
-bugfix <repo> --bug "..." --url "http://..."
-bugfix run <repo> --bug "..." --url "http://..."   # explicit subcommand
+debug setup [--repo <path>]
+debug <repo> --bug "..." --url "http://..."
+debug run <repo> --bug "..." --url "http://..."
 ```
 
-Setup checks live in `src/setup/checks.ts` and `src/setup/run-setup.ts`.
+Setup checks: `src/setup/checks.ts`, `src/setup/run-setup.ts`.
 
 ## Conventions
 
 - ESM (`"type": "module"`), NodeNext, strict TS
 - Do not commit `node_modules/`, `dist/`
 - Keep HTML reports fully offline (no CDN assets)
-- Minimize scope when fixing bugs in this repo
+- CLI name is `debug`; package/repo name is `debug-agent`
 
 ## Operational rules (this project)
 
 - Run `npm run build` before claiming green
-- Do not edit user target repos beyond what the agent loop requires
+- Do not edit user target repos beyond what the debug loop requires
 - Reports and ledgers are diagnostic artifacts; do not commit them from target repos

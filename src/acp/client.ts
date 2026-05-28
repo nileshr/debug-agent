@@ -140,7 +140,7 @@ export class AcpClient extends EventEmitter {
 
     if (method === "cursor/ask_question" && requestId != null) {
       this.respond(requestId, {
-        outcome: { outcome: "skipped", reason: "automated bugfix agent" },
+        outcome: { outcome: "skipped", reason: "automated debug-agent" },
       });
     }
 

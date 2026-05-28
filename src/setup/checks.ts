@@ -146,7 +146,7 @@ export async function checkAcpAuth(): Promise<CheckResult> {
       "acp-auth",
       "ACP authenticate",
       `Failed: ${msg.slice(0, 200)}`,
-      "Run `agent login`, then retry `bugfix setup`. Or set CURSOR_API_KEY.",
+      "Run `agent login`, then retry `debug setup`. Or set CURSOR_API_KEY.",
     );
   } finally {
     await client.stop();
@@ -305,7 +305,7 @@ export async function checkRepoMcp(repoPath: string): Promise<CheckResult> {
       "repo-mcp",
       "Target repo",
       `Path does not exist: ${resolved}`,
-      "Pass a valid repo path: bugfix setup --repo /path/to/project",
+      "Pass a valid repo path: debug setup --repo /path/to/project",
     );
   }
 
@@ -315,7 +315,7 @@ export async function checkRepoMcp(repoPath: string): Promise<CheckResult> {
       "repo-mcp",
       "Repo MCP config",
       `No ${mcpPath} yet`,
-      "First `bugfix run` will add chrome-devtools to .cursor/mcp.json automatically.",
+      "First `debug run` will add chrome-devtools to .cursor/mcp.json automatically.",
     );
   }
 
@@ -342,7 +342,7 @@ export async function checkRepoMcp(repoPath: string): Promise<CheckResult> {
       "repo-mcp",
       "Repo MCP config",
       `Invalid ${mcpPath}: ${(err as Error).message}`,
-      "Fix JSON syntax or delete the file and re-run bugfix.",
+      "Fix JSON syntax or delete the file and re-run debug-agent.",
     );
   }
 }

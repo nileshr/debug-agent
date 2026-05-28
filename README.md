@@ -1,8 +1,8 @@
 # debug-agent
 
-Bug-fix CLI that drives **Cursor `agent acp`** through an emulated Debug Mode loop: hypothesize → instrument → reproduce in Chrome → fix → verify → review → HTML report.
+ACP debugger that **emulates** Cursor IDE Debug Mode: hypothesize → instrument → reproduce in Chrome → fix → verify → review → HTML report.
 
-Native Cursor Debug Mode is **not** available over ACP (only `agent`, `plan`, `ask`). This tool reproduces that workflow with prompts and `chrome-devtools-mcp`.
+Native Debug Mode is not available over ACP (`agent`, `plan`, `ask` only). This CLI reproduces that workflow via `agent acp`, `chrome-devtools-mcp`, and `.cursor/debug.log`.
 
 ## Quick start
 
@@ -11,19 +11,19 @@ Native Cursor Debug Mode is **not** available over ACP (only `agent`, `plan`, `a
 agent login
 cd ~/work/debug-agent && npm install && npm run build && npm link
 
-# Verify your machine is ready
-bugfix setup
-bugfix setup --repo /path/to/your/repo   # optional: check .cursor/mcp.json
+# Verify environment
+debug setup
+debug setup --repo /path/to/your/repo
 
-# Per bug (app must be running at --url)
-bugfix /path/to/your/repo \
+# Run debugger on a bug (app must be running at --url)
+debug /path/to/your/repo \
   --bug "Save button opens a blank modal" \
   --url "http://localhost:3000"
 ```
 
-When the run finishes, open the HTML report (auto-opens by default):
+Report (auto-opens by default): `~/.debug-agent/reports/run-<id>.html`
 
-`~/.debug-agent/reports/run-<id>.html`
+The `debug-agent` bin is an alias for the same CLI.
 
 ## Requirements
 
@@ -32,9 +32,25 @@ When the run finishes, open the HTML report (auto-opens by default):
 - Node 20+
 - Chrome (for `chrome-devtools-mcp`)
 
-On first run, `chrome-devtools` is added to `<repo>/.cursor/mcp.json` if missing.
+Adds `chrome-devtools` to `<repo>/.cursor/mcp.json` on first run if missing.
 
-## Common flags
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `debug setup` | Check Node, CLI, auth, Chrome, MCP, ACP |
+| `debug run <repo> --bug ... --url ...` | Explicit run |
+| `debug <repo> --bug ... --url ...` | Same as `run` (default) |
+
+### Setup flags
+
+| Flag | Purpose |
+|------|---------|
+| `--repo <path>` | Check target `.cursor/mcp.json` |
+| `--skip-acp-probe` | Skip live ACP session |
+| `--json` | JSON output |
+
+### Run flags
 
 | Flag | Purpose |
 |------|---------|
@@ -43,25 +59,16 @@ On first run, `chrome-devtools` is added to `<repo>/.cursor/mcp.json` if missing
 | `--max-cycles 5` | Cap verify/fix retries |
 | `--model "composer-2.5[fast=true]"` | ACP model |
 
-## Setup command
-
-`bugfix setup` checks Node, Cursor CLI, auth, Chrome, `chrome-devtools-mcp`, ACP connectivity, and the report directory. Failed checks print fix suggestions.
-
-| Flag | Purpose |
-|------|---------|
-| `--repo <path>` | Validate target repo and MCP config |
-| `--skip-acp-probe` | Skip live ACP session (faster) |
-| `--json` | Machine-readable output |
-
 ## Smoke tests
 
 ```bash
 npm run smoke:acp
 npm run smoke:report
+npm run setup
 ```
 
 ## More detail
 
-See [AGENTS.md](./AGENTS.md) for architecture, phase loop, and contributor notes.
+See [AGENTS.md](./AGENTS.md).
 
 MIT

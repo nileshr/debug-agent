@@ -35,7 +35,7 @@ export async function runSetup(options: RunChecksOptions & { json?: boolean }): 
     return report;
   }
 
-  console.log(chalk.bold("\nbugfix setup — environment check\n"));
+  console.log(chalk.bold("\ndebug-agent setup — environment check\n"));
 
   for (const c of checks) {
     console.log(`${icon(c.status)} ${chalk.bold(c.name)}`);
@@ -55,13 +55,13 @@ export async function runSetup(options: RunChecksOptions & { json?: boolean }): 
   if (report.ready) {
     console.log(
       chalk.green(
-        "\nReady to run:\n  bugfix /path/to/repo --bug \"...\" --url \"http://localhost:3000\"\n",
+        "\nReady to run:\n  debug /path/to/repo --bug \"...\" --url \"http://localhost:3000\"\n",
       ),
     );
   } else {
     console.log(
       chalk.red(
-        "\nFix the failed checks above before running bugfix.\n",
+        "\nFix the failed checks above before running debug-agent.\n",
       ),
     );
   }

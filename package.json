@@ -1,10 +1,11 @@
 {
   "name": "debug-agent",
   "version": "0.1.0",
-  "description": "ACP-driven bug-fix agent with emulated Cursor Debug Mode loop",
+  "description": "debug-agent: ACP-driven debugger with emulated Cursor Debug Mode loop",
   "type": "module",
   "bin": {
-    "bugfix": "./dist/cli.js"
+    "debug": "./dist/cli.js",
+    "debug-agent": "./dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "smoke:acp": "node scripts/smoke-acp.mjs",
     "smoke:report": "node scripts/smoke-report.mjs",
-    "setup": "node dist/cli.js setup"
+    "setup": "node dist/cli.js setup",
+    "debug:setup": "node dist/cli.js setup"
   },
   "engines": {
     "node": ">=20"

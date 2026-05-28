@@ -8,14 +8,14 @@ import { runSetup, exitCodeForReport } from "./setup/run-setup.js";
 const program = new Command();
 
 program
-  .name("bugfix")
+  .name("debug")
   .description(
-    "ACP bug-fix agent with emulated Cursor Debug Mode (hypothesize → instrument → reproduce → fix → verify → review)",
+    "debug-agent: ACP debugger with emulated Cursor Debug Mode (hypothesize → instrument → reproduce → fix → verify → review)",
   );
 
 program
   .command("setup")
-  .description("Verify prerequisites and suggest fixes before running the debug agent")
+  .description("Verify prerequisites and suggest fixes before running debug-agent")
   .option("--repo <path>", "Also check target repo .cursor/mcp.json")
   .option("--skip-acp-probe", "Skip live ACP authenticate/session probe (faster)")
   .option("--json", "Print machine-readable JSON")
@@ -30,7 +30,7 @@ program
 
 program
   .command("run <repo>")
-  .description("Run the emulated Debug Mode bug-fix loop on a repository")
+  .description("Run the emulated Debug Mode loop on a repository")
   .requiredOption("--bug <description>", "Bug description")
   .requiredOption("--url <url>", "App URL to reproduce in Chrome via chrome-devtools MCP")
   .option("--model <id>", "ACP model id", "composer-2.5[fast=true]")
@@ -39,12 +39,12 @@ program
   .option("--no-report", "Skip HTML report generation")
   .option("--no-open", "Print file:// link only; do not open browser")
   .action(async (repoArg: string, opts) => {
-    await runBugfix(repoArg, opts);
+    await runDebugAgent(repoArg, opts);
   });
 
-// Default: `bugfix <repo> --bug ...` (same as `bugfix run <repo>`)
+// Default: `debug <repo> --bug ...` (same as `debug run <repo>`)
 program
-  .argument("[repo]", "Repository path (use `bugfix run <repo>` or `bugfix setup`)")
+  .argument("[repo]", "Repository path (use `debug run <repo>` or `debug setup`)")
   .option("--bug <description>", "Bug description")
   .option("--url <url>", "App URL for chrome-devtools reproduction")
   .option("--model <id>", "ACP model id", "composer-2.5[fast=true]")
@@ -61,15 +61,15 @@ program
       console.error(
         chalk.red("Missing --bug and --url. Example:\n") +
           chalk.dim(
-            '  bugfix ./my-app --bug "Save fails" --url "http://localhost:3000"\n',
+            '  debug ./my-app --bug "Save fails" --url "http://localhost:3000"\n',
           ),
       );
       process.exit(1);
     }
-    await runBugfix(repoArg, opts);
+    await runDebugAgent(repoArg, opts);
   });
 
-async function runBugfix(
+async function runDebugAgent(
   repoArg: string,
   opts: {
     bug: string;
@@ -90,11 +90,11 @@ async function runBugfix(
 
   const openReport = !opts.noOpen;
 
-  console.log(chalk.bold("Debug Agent (ACP + emulated Debug Mode)"));
+  console.log(chalk.bold("debug-agent (ACP + emulated Debug Mode)"));
   console.log(chalk.dim(`Repo: ${repoPath}`));
   console.log(chalk.dim(`URL:  ${opts.url}`));
   console.log(
-    chalk.dim(`Tip: run \`bugfix setup --repo ${repoPath}\` to verify prerequisites.\n`),
+    chalk.dim(`Tip: run \`debug setup --repo ${repoPath}\` to verify prerequisites.\n`),
   );
 
   try {
