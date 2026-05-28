@@ -14,7 +14,8 @@
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
     "smoke:acp": "node scripts/smoke-acp.mjs",
-    "smoke:report": "node scripts/smoke-report.mjs"
+    "smoke:report": "node scripts/smoke-report.mjs",
+    "setup": "node dist/cli.js setup"
   },
   "engines": {
     "node": ">=20"

@@ -8,3 +8,6 @@ export {
   acpMcpServersParam,
   CHROME_DEVTOOLS_MCP_ENTRY,
 } from "./mcp/chrome.js";
+export { runSetup, exitCodeForReport } from "./setup/run-setup.js";
+export { runAllChecks } from "./setup/checks.js";
+export type { CheckResult, SetupReport } from "./setup/types.js";

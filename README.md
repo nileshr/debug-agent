@@ -11,6 +11,10 @@ Native Cursor Debug Mode is **not** available over ACP (only `agent`, `plan`, `a
 agent login
 cd ~/work/debug-agent && npm install && npm run build && npm link
 
+# Verify your machine is ready
+bugfix setup
+bugfix setup --repo /path/to/your/repo   # optional: check .cursor/mcp.json
+
 # Per bug (app must be running at --url)
 bugfix /path/to/your/repo \
   --bug "Save button opens a blank modal" \
@@ -38,6 +42,16 @@ On first run, `chrome-devtools` is added to `<repo>/.cursor/mcp.json` if missing
 | `--no-report` | Skip HTML report |
 | `--max-cycles 5` | Cap verify/fix retries |
 | `--model "composer-2.5[fast=true]"` | ACP model |
+
+## Setup command
+
+`bugfix setup` checks Node, Cursor CLI, auth, Chrome, `chrome-devtools-mcp`, ACP connectivity, and the report directory. Failed checks print fix suggestions.
+
+| Flag | Purpose |
+|------|---------|
+| `--repo <path>` | Validate target repo and MCP config |
+| `--skip-acp-probe` | Skip live ACP session (faster) |
+| `--json` | Machine-readable output |
 
 ## Smoke tests
 

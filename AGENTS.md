@@ -39,8 +39,12 @@ npm run build
 npm run typecheck
 npm run smoke:acp
 npm run smoke:report
+bugfix setup [--repo <path>]
 bugfix <repo> --bug "..." --url "http://..."
+bugfix run <repo> --bug "..." --url "http://..."   # explicit subcommand
 ```
+
+Setup checks live in `src/setup/checks.ts` and `src/setup/run-setup.ts`.
 
 ## Conventions
 
