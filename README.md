@@ -1,147 +1,72 @@
 # debug-agent
 
-ACP debugger that **emulates** Cursor IDE Debug Mode: hypothesize → instrument → reproduce in Chrome → fix → verify → review → HTML report.
+CLI debugger that runs a multi-phase debug loop on your codebase: hypothesize → instrument → reproduce → analyze → fix → verify → review → HTML report.
 
-Native Debug Mode is not available over ACP (`agent`, `plan`, `ask` only). This CLI reproduces that workflow via `agent acp`, browser MCP, and `<repo>/.debug-agent/debug.log`.
+Uses **Cursor ACP** (`agent acp`) today. **Codex and other ACP agents** are on the roadmap.
 
-## Quick start
+## Requirements
+
+- Node.js 20+
+- [Cursor CLI](https://cursor.com/docs/cli): `agent` on PATH
+- `agent login` (or `CURSOR_API_KEY`)
+- Chrome (when verifying in the browser via `--url`)
+
+## Install
+
+**From source (dev):**
 
 ```bash
-# Once
-agent login
-cd ~/work/debug-agent && npm install && npm run build && npm link
+git clone https://github.com/nileshr/debug-agent.git
+cd debug-agent
+npm install
+npm run build
+npm link
+```
 
-# Verify environment
+**From a release tarball** — see [docs/INSTALL.md](./docs/INSTALL.md).
+
+Verify the install:
+
+```bash
 debug setup
-debug setup --repo /path/to/your/repo
+debug -v
+```
 
-# Run debugger on a bug (app must be running at --url)
+## Run
+
+From the repo you want to debug (defaults to the current directory):
+
+```bash
+cd /path/to/your/repo
+debug run "Save button opens a blank modal" --url "http://localhost:3000"
+```
+
+Or pass the repo explicitly:
+
+```bash
 debug /path/to/your/repo \
   --bug "Save button opens a blank modal" \
   --url "http://localhost:3000"
 ```
 
-Report (auto-opens by default): `~/.debug-agent/reports/run-<id>.html`
+- `--url` — browser verification (Chrome DevTools MCP). Omit for CLI/shell verification.
+- Report opens by default at `~/.debug-agent/reports/run-<id>.html` (`--no-open` to skip).
+- Agent prefs: `~/.debug-agent/config.json` (optional repo override in `<repo>/.debug-agent/config.json`).
+
+Other useful commands:
+
+```bash
+debug setup --repo .                  # check current repo + MCP
+debug config show                       # view saved model / browser prefs
+debug upgrade                           # update from latest release
+debug resume                            # continue an interrupted run
+```
 
 The `debug-agent` bin is an alias for the same CLI.
 
-## Requirements
+## More
 
-- Cursor CLI: `agent` on PATH
-- `agent login` (or `CURSOR_API_KEY`)
-- Node 20+
-- Chrome (for `chrome-devtools-mcp`)
-
-Agent prefs live in `~/.debug-agent/config.json` (optional repo override: `<repo>/.debug-agent/config.json`). First TTY run opens an interactive model picker if no config exists.
-
-Adds the selected browser MCP (`chrome-devtools` or `playwright`) to `<repo>/.cursor/mcp.json` on first browser verify run if missing.
-
-## Commands
-
-| Command | Purpose |
-|---------|---------|
-| `debug setup` | Check Node, CLI, auth, Chrome, MCP, ACP |
-| `debug run <repo> --bug ... --url ...` | Explicit run |
-| `debug <repo> --bug ... --url ...` | Same as `run` (default) |
-
-### Setup flags
-
-| Flag | Purpose |
-|------|---------|
-| `--repo <path>` | Check target `.cursor/mcp.json` |
-| `--skip-acp-probe` | Skip live ACP session |
-| `--json` | JSON output |
-
-### Run flags
-
-| Flag | Purpose |
-|------|---------|
-| `--no-open` | Print `file://` link only |
-| `--no-report` | Skip HTML report |
-| `--max-cycles 5` | Cap verify/fix retries |
-| `--model <id>` | Fixer model (overrides config) |
-| `--planner-model <id>` | Planner model (hypothesize) |
-| `--reviewer-model <id>` | Reviewer model (review phase) |
-| `--browser-mcp chrome-devtools\|playwright` | Browser MCP for `--url` / Vite verify |
-| `debug config` | Show or edit saved agent prefs |
-
-## Smoke tests
-
-```bash
-npm run smoke:acp
-npm run smoke:report
-npm run setup
-```
-
-## Todo fixture (maintainer harness)
-
-Dev-only resettable Vite React todo app for verifying debug-agent against known bugs.
-
-```bash
-# Prepare disposable workdir from seed
-npm run fixture:reset
-
-# Manual inspection (http://localhost:5199)
-npm run fixture:serve
-
-# List seeded bugs and symptom text
-npm run fixture:list
-
-# Run debug-agent on one bug (fresh reset each time)
-npm run fixture:run:one -- add-todo
-
-# Run all bugs in order (--interactive pauses between bugs)
-npm run fixture:run:all
-npm run fixture:run:all:auto
-
-# Maintainer acceptance (fails on broken baseline, passes when fixed)
-npm run fixture:accept
-```
-
-| Path | Role |
-|------|------|
-| `examples/todo-fixture/seed/` | Committed broken app |
-| `.tmp/todo-fixture-workdir/` | Disposable copy passed to `debug` |
-| `examples/todo-fixture/bugs.json` | Symptom-only manifest for `--bug` |
-| `examples/todo-fixture/maintainer/` | Expected behavior + Vitest/Playwright oracle |
-| `scripts/todo-fixture.mjs` | reset / serve / run / accept |
-
-Override debugger binary: `DEBUG_BIN=debug npm run fixture:run:one -- add-todo` (default uses local `dist/cli.js`).
-
-See [examples/todo-fixture/README.md](./examples/todo-fixture/README.md).
-
-## Version and upgrade
-
-```bash
-debug -v
-debug -V
-debug upgrade --check
-debug upgrade
-```
-
-## Install on other computers
-
-See **[docs/INSTALL.md](./docs/INSTALL.md)** for GitHub releases, offline `.tgz`, git clone, and `npm link`.
-
-Quick install from latest release:
-
-```bash
-# See https://github.com/nileshr/debug-agent/releases for VERSION
-curl -fsSL -o debug-agent-VERSION.tgz \
-  "https://github.com/nileshr/debug-agent/releases/latest/download/debug-agent-VERSION.tgz"
-npm install -g ./debug-agent-VERSION.tgz
-```
-
-Quick tarball from source:
-
-```bash
-npm run build && npm pack
-# copy debug-agent-*.tgz to target machine:
-npm install -g ./debug-agent-0.1.1.tgz
-```
-
-## More detail
-
-See [AGENTS.md](./AGENTS.md).
+- [docs/INSTALL.md](./docs/INSTALL.md) — releases, offline install, upgrade
+- [AGENTS.md](./AGENTS.md) — architecture and maintainer details
 
 MIT
