@@ -42,18 +42,19 @@ npm run typecheck
 npm run smoke:acp
 npm run smoke:report
 npm run smoke:version
+npm run publish [-- --patch|--minor|--major|--dry-run]
 debug -v
 debug -V
 debug setup [--repo <path>]
-debug upgrade [--check] [--force] [--tag <tag>]
+debug upgrade [--check] [--force]
 debug <repo> --bug "..." --url "http://..."
 debug run <repo> --bug "..." --url "http://..."
 ```
 
 - Setup: `src/setup/checks.ts`, `src/setup/run-setup.ts`
-- Upgrade: `src/setup/upgrade.ts`
+- Upgrade: `src/setup/upgrade.ts`, `src/setup/github-release.ts`
 - Version: `src/version.ts` (reads `package.json`)
-- Distribution: `docs/INSTALL.md`, `npm pack` / `npm publish` via `files` + `prepack`
+- Distribution: `docs/INSTALL.md`, GitHub Releases via `.github/workflows/release.yml` + `npm run publish` (`scripts/publish.mjs`); release asset is `npm pack` tarball + `SHA256SUMS.txt`
 
 ## Todo fixture (dev-only)
 

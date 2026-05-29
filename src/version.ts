@@ -8,6 +8,10 @@ export interface PackageInfo {
   description?: string;
 }
 
+interface PackageJson extends PackageInfo {
+  repository?: string | { type?: string; url?: string };
+}
+
 let cached: PackageInfo | null = null;
 
 /** Directory containing package.json (project root when installed). */
@@ -31,4 +35,22 @@ export function readPackageInfo(): PackageInfo {
 
 export function getVersion(): string {
   return readPackageInfo().version;
+}
+
+/** e.g. `nileshr/debug-agent` from package.json `repository` or git remote. */
+export function getRepositorySlug(): string | null {
+  const pkgPath = path.join(getPackageRoot(), "package.json");
+  const raw = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as PackageJson;
+  const repo = raw.repository;
+  const url =
+    typeof repo === "string"
+      ? repo
+      : typeof repo?.url === "string"
+        ? repo.url
+        : null;
+  if (url) {
+    const match = url.match(/github\.com[/:]([^/]+\/[^/.]+?)(?:\.git)?$/i);
+    if (match) return match[1]!;
+  }
+  return null;
 }

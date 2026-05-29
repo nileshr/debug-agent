@@ -3,15 +3,17 @@ import path from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import chalk from "chalk";
-import { getPackageRoot, getVersion, readPackageInfo } from "../version.js";
+import {
+  downloadReleaseTarball,
+  fetchLatestGitHubRelease,
+} from "./github-release.js";
+import { getPackageRoot, getRepositorySlug, getVersion } from "../version.js";
 
 const execFileAsync = promisify(execFile);
 
 export type InstallKind = "global-npm" | "git" | "local-dev" | "unknown";
 
 export interface UpgradeOptions {
-  /** npm dist-tag (default latest) */
-  tag?: string;
   /** Only print whether an update exists */
   check?: boolean;
   /** Reinstall even when versions match */
@@ -36,25 +38,6 @@ function compareVersions(a: string, b: string): number {
     if (da < db) return -1;
   }
   return 0;
-}
-
-async function npmViewVersion(
-  packageName: string,
-  tag: string,
-): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      "npm",
-      ["view", `${packageName}@${tag}`, "version", "--json"],
-      { timeout: 30_000 },
-    );
-    const parsed = JSON.parse(stdout.trim());
-    if (typeof parsed === "string") return parsed;
-    if (Array.isArray(parsed)) return parsed[parsed.length - 1] ?? null;
-    return String(parsed);
-  } catch {
-    return null;
-  }
 }
 
 async function getGlobalNpmRoot(): Promise<string | null> {
@@ -118,20 +101,31 @@ function runCommand(
   });
 }
 
-async function upgradeGlobalNpm(
-  packageName: string,
-  tag: string,
+async function upgradeGlobalFromRelease(
+  release: NonNullable<Awaited<ReturnType<typeof fetchLatestGitHubRelease>>>,
 ): Promise<{ ok: boolean; message: string }> {
-  const spec = tag === "latest" ? `${packageName}@latest` : `${packageName}@${tag}`;
-  console.log(chalk.dim(`Running: npm install -g ${spec}\n`));
-  const result = await runCommand("npm", ["install", "-g", spec], process.cwd());
-  if (result.code === 0) {
-    return { ok: true, message: `Installed ${spec} globally.` };
+  console.log(chalk.dim(`Downloading ${release.tarballName}…\n`));
+  try {
+    const tarballPath = await downloadReleaseTarball(
+      release.tarballUrl,
+      release.tarballName,
+    );
+    console.log(chalk.dim(`Running: npm install -g ${tarballPath}\n`));
+    const result = await runCommand("npm", ["install", "-g", tarballPath], process.cwd());
+    if (result.code === 0) {
+      return {
+        ok: true,
+        message: `Installed ${release.version} from GitHub release.`,
+      };
+    }
+    return {
+      ok: false,
+      message: `npm install failed:\n${result.stderr || result.stdout}`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, message: `Download failed: ${msg}` };
   }
-  return {
-    ok: false,
-    message: `npm install failed:\n${result.stderr || result.stdout}`,
-  };
 }
 
 async function upgradeGitClone(packageRoot: string): Promise<{ ok: boolean; message: string }> {
@@ -184,19 +178,20 @@ async function upgradeLocalDev(packageRoot: string): Promise<{ ok: boolean; mess
 }
 
 export async function runUpgrade(options: UpgradeOptions = {}): Promise<UpgradeResult> {
-  const tag = options.tag ?? "latest";
-  const pkg = readPackageInfo();
   const currentVersion = getVersion();
   const packageRoot = getPackageRoot();
   const executablePath = process.argv[1] ?? "";
   const installKind = await detectInstallKind(packageRoot, executablePath);
-
-  const latestVersion = await npmViewVersion(pkg.name, tag);
+  const repoSlug = getRepositorySlug();
+  const latestRelease = repoSlug ? await fetchLatestGitHubRelease(repoSlug) : null;
+  const latestVersion = latestRelease?.version ?? null;
 
   console.log(chalk.bold("debug-agent upgrade\n"));
   console.log(`  Current:  ${currentVersion}`);
   console.log(
-    `  Registry: ${latestVersion ?? chalk.yellow("(not published or unreachable)")} @${tag}`,
+    `  GitHub:   ${latestVersion ?? chalk.yellow("(no release or unreachable)")}${
+      latestRelease ? chalk.dim(` — ${latestRelease.htmlUrl}`) : ""
+    }`,
   );
   console.log(`  Install:  ${installKind}`);
   console.log(`  Root:     ${packageRoot}\n`);
@@ -204,8 +199,8 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<UpgradeR
   if (latestVersion && compareVersions(currentVersion, latestVersion) >= 0 && !options.force) {
     const msg =
       latestVersion === currentVersion
-        ? "Already on the latest published version."
-        : "Current version is newer than registry (local/dev build?).";
+        ? "Already on the latest GitHub release."
+        : "Current version is newer than GitHub release (local/dev build?).";
     console.log(chalk.green(msg));
     if (options.check) {
       return {
@@ -233,7 +228,7 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<UpgradeR
       latestVersion != null && compareVersions(currentVersion, latestVersion) < 0;
     const msg = needs
       ? `Update available: ${currentVersion} → ${latestVersion}`
-      : "No registry update detected.";
+      : "No GitHub update detected.";
     console.log(needs ? chalk.yellow(msg) : chalk.green(msg));
     return {
       currentVersion,
@@ -248,15 +243,28 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<UpgradeR
 
   switch (installKind) {
     case "global-npm":
-      if (!latestVersion && !options.force) {
+      if (!latestRelease && !options.force) {
         result = {
           ok: false,
-          message:
-            "Package not found on npm. Publish first, or install from a tarball:\n  npm install -g ./debug-agent-0.1.0.tgz",
+          message: [
+            "No GitHub release found.",
+            repoSlug
+              ? `Check https://github.com/${repoSlug}/releases`
+              : "Add a `repository` field to package.json.",
+            "Or install manually:",
+            `  npm install -g ./debug-agent-${currentVersion}.tgz`,
+          ].join("\n"),
         };
         break;
       }
-      result = await upgradeGlobalNpm(pkg.name, tag);
+      if (!latestRelease) {
+        result = {
+          ok: false,
+          message: "No GitHub release to install. Publish a release first.",
+        };
+        break;
+      }
+      result = await upgradeGlobalFromRelease(latestRelease);
       break;
     case "git":
       result = await upgradeGitClone(packageRoot);
@@ -269,10 +277,14 @@ export async function runUpgrade(options: UpgradeOptions = {}): Promise<UpgradeR
         ok: false,
         message: [
           "Could not detect install method. Try one of:",
-          `  npm install -g ${pkg.name}@latest`,
+          repoSlug
+            ? `  debug upgrade   (after global install from GitHub release)`
+            : undefined,
           `  npm install -g ./debug-agent-${currentVersion}.tgz`,
           "  git pull && npm install && npm run build  (from clone)",
-        ].join("\n"),
+        ]
+          .filter(Boolean)
+          .join("\n"),
       };
   }
 
@@ -304,7 +316,7 @@ export function exitCodeForUpgrade(
   if (result.upgraded) return 0;
   if (
     result.message.includes("Already on") ||
-    result.message.includes("No registry update")
+    result.message.includes("No GitHub update")
   ) {
     return 0;
   }

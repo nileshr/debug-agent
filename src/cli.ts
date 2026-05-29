@@ -70,14 +70,12 @@ program
 
 program
   .command("upgrade")
-  .description("Upgrade debug-agent (npm global, git clone, or local dev checkout)")
-  .option("--check", "Only check for a newer version on npm")
-  .option("--tag <tag>", "npm dist-tag to install", "latest")
+  .description("Upgrade debug-agent (GitHub release, git clone, or local dev checkout)")
+  .option("--check", "Only check for a newer version on GitHub")
   .option("--force", "Reinstall even if version matches")
   .action(async (opts) => {
     const result = await runUpgrade({
       check: opts.check,
-      tag: opts.tag,
       force: opts.force,
     });
     process.exit(exitCodeForUpgrade(result, { check: opts.check }));

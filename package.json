@@ -10,12 +10,14 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/cli.js",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build",
+    "prepublishOnly": "node scripts/no-npm-publish.mjs",
     "pack:tarball": "npm pack",
+    "publish": "node scripts/publish.mjs",
     "smoke:acp": "node scripts/smoke-acp.mjs",
     "smoke:report": "node scripts/smoke-report.mjs",
     "smoke:version": "node scripts/smoke-version.mjs",
@@ -45,6 +47,14 @@
     "chrome-devtools"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nileshr/debug-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nileshr/debug-agent/issues"
+  },
+  "homepage": "https://github.com/nileshr/debug-agent#readme",
   "engines": {
     "node": ">=20"
   },

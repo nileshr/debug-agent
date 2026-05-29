@@ -115,14 +115,23 @@ debug upgrade
 
 ## Install on other computers
 
-See **[docs/INSTALL.md](./docs/INSTALL.md)** for npm publish, offline `.tgz`, git clone, and `npm link`.
+See **[docs/INSTALL.md](./docs/INSTALL.md)** for GitHub releases, offline `.tgz`, git clone, and `npm link`.
 
-Quick tarball:
+Quick install from latest release:
+
+```bash
+# See https://github.com/nileshr/debug-agent/releases for VERSION
+curl -fsSL -o debug-agent-VERSION.tgz \
+  "https://github.com/nileshr/debug-agent/releases/latest/download/debug-agent-VERSION.tgz"
+npm install -g ./debug-agent-VERSION.tgz
+```
+
+Quick tarball from source:
 
 ```bash
 npm run build && npm pack
 # copy debug-agent-*.tgz to target machine:
-npm install -g ./debug-agent-0.1.0.tgz
+npm install -g ./debug-agent-0.1.1.tgz
 ```
 
 ## More detail
