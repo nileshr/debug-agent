@@ -2,7 +2,6 @@
 import path from "node:path";
 import { Command } from "commander";
 import chalk from "chalk";
-import { DebugLoopController } from "./debug/controller.js";
 import { resolveVerifyTarget } from "./debug/verify-target.js";
 import { runSetup, exitCodeForReport } from "./setup/run-setup.js";
 import { runUpgrade, exitCodeForUpgrade } from "./setup/upgrade.js";
@@ -47,6 +46,16 @@ const pkgVersion = getVersion();
 function printVersionAndExit(): void {
   process.stdout.write(`${pkgVersion}\n`);
   process.exit(0);
+}
+
+/** Avoid loading sqlite-backed modules for bare version flags. */
+function isVersionOnlyInvocation(argv: string[]): boolean {
+  const args = argv.slice(2);
+  return args.length === 1 && (args[0] === "-v" || args[0] === "-V" || args[0] === "--version");
+}
+
+if (isVersionOnlyInvocation(process.argv)) {
+  printVersionAndExit();
 }
 
 program
@@ -310,6 +319,7 @@ async function runDebugAgent(
   );
 
   try {
+    const { DebugLoopController } = await import("./debug/controller.js");
     const controller = new DebugLoopController({
       repoPath,
       verifyMode: opts.verifyTarget.mode,
