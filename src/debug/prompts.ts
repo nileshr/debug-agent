@@ -1,4 +1,5 @@
 import type { Hypothesis, RunLedger } from "./types.js";
+import { readPackageScripts } from "./verify-target.js";
 
 export const SUMMARY_JSON_SCHEMA = `{
   "bugSummary": "string",
@@ -25,6 +26,21 @@ function hypothesesBlock(hypotheses: Hypothesis[]): string {
     .join("\n");
 }
 
+function verificationBlock(ledger: RunLedger): string {
+  if (ledger.verifyMode === "browser") {
+    return `Verification: browser (chrome-devtools MCP)\nApp URL: ${ledger.url ?? "(not set)"}`;
+  }
+  const scripts = readPackageScripts(ledger.repoPath);
+  const scriptLines = scripts
+    ? Object.entries(scripts)
+        .map(([name, cmd]) => `  ${name}: ${cmd}`)
+        .join("\n")
+    : "  (no package.json scripts — infer commands from the repo)";
+  return `Verification: CLI (shell — do NOT use chrome-devtools MCP)
+Use terminal/shell tools to reproduce and verify. Prefer npm/bun scripts from package.json:
+${scriptLines}`;
+}
+
 export function promptHypothesize(ctx: PromptContext): string {
   const { ledger } = ctx;
   return `You are in DEBUG emulation — HYPOTHESIZE phase.
@@ -32,7 +48,7 @@ export function promptHypothesize(ctx: PromptContext): string {
 Bug description:
 ${ledger.bugDescription}
 
-App URL: ${ledger.url}
+${verificationBlock(ledger)}
 Repo: ${ledger.repoPath}
 Run ID: ${ledger.runId}
 
@@ -74,6 +90,23 @@ When done, reply with:
 
 export function promptReproduce(ctx: PromptContext): string {
   const { ledger } = ctx;
+  if (ledger.verifyMode === "cli") {
+    return `DEBUG emulation — REPRODUCE phase.
+
+${verificationBlock(ledger)}
+
+Bug: ${ledger.bugDescription}
+
+Steps:
+1. Run the CLI command(s) that trigger the bug (build, test, or direct bin invocation).
+2. Capture stdout/stderr and exit codes.
+3. If instrumentation was added, check ${ledger.repoPath}/.cursor/debug.log for runtime data.
+
+When done, reply with:
+\`\`\`json
+{"steps":["npm run build","node dist/cli.js -V"],"logCaptured":true}
+\`\`\``;
+  }
   return `DEBUG emulation — REPRODUCE phase.
 
 Use the chrome-devtools MCP server to reproduce the bug.
@@ -129,6 +162,23 @@ Reply when done with:
 
 export function promptVerify(ctx: PromptContext): string {
   const { ledger } = ctx;
+  if (ledger.verifyMode === "cli") {
+    return `DEBUG emulation — VERIFY phase.
+
+${verificationBlock(ledger)}
+
+Re-run the same CLI command(s) used to reproduce the bug. The fix should prevent the original failure.
+
+If verification passes:
+\`\`\`json
+{"verified":true}
+\`\`\`
+
+If it still fails:
+\`\`\`json
+{"verified":false,"reason":"..."}
+\`\`\``;
+  }
   return `DEBUG emulation — VERIFY phase.
 
 Reproduce the bug scenario using chrome-devtools MCP at ${ledger.url}.

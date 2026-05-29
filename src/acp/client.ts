@@ -101,7 +101,14 @@ export class AcpClient extends EventEmitter {
       if (!waiter) return;
       this.pending.delete(id);
       if (msg.error) {
-        waiter.reject(msg.error);
+        const rpcErr = msg.error as {
+          code?: number;
+          message?: string;
+          data?: unknown;
+        };
+        const detail =
+          rpcErr.data != null ? ` ${JSON.stringify(rpcErr.data)}` : "";
+        waiter.reject(new Error(`${rpcErr.message ?? "RPC error"}${detail}`));
       } else {
         waiter.resolve(msg.result);
       }
@@ -223,18 +230,18 @@ export class AcpClient extends EventEmitter {
 
   async setConfigOption(params: {
     sessionId: string;
-    optionId: string;
+    configId: string;
     value: string;
   }): Promise<void> {
     await this.send("session/set_config_option", params);
   }
 
   async setMode(sessionId: string, mode: SessionMode): Promise<void> {
-    await this.setConfigOption({ sessionId, optionId: "mode", value: mode });
+    await this.setConfigOption({ sessionId, configId: "mode", value: mode });
   }
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
-    await this.setConfigOption({ sessionId, optionId: "model", value: modelId });
+    await this.setConfigOption({ sessionId, configId: "model", value: modelId });
   }
 
   onAskQuestion(handler: (params: CursorAskQuestionParams) => void): this {

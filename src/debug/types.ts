@@ -27,7 +27,8 @@ export const FinalReportSchema = z.object({
   runId: z.string(),
   sessionId: z.string(),
   repoPath: z.string(),
-  url: z.string(),
+  verifyMode: z.enum(["cli", "browser"]),
+  url: z.string().optional(),
   bugDescription: z.string(),
   status: z.enum(["fixed", "partial", "abandoned"]),
   model: z.string(),
@@ -42,7 +43,8 @@ export const FinalReportSchema = z.object({
     sentinelCountAfter: z.number(),
   }),
   reproduction: z.object({
-    url: z.string(),
+    mode: z.enum(["cli", "browser"]),
+    url: z.string().optional(),
     steps: z.array(z.string()),
     logEntries: z.array(z.unknown()),
   }),
@@ -77,11 +79,14 @@ export type Phase =
   | "summarize"
   | "done";
 
+export type VerifyMode = "cli" | "browser";
+
 export interface RunLedger {
   runId: string;
   sessionId: string;
   repoPath: string;
-  url: string;
+  verifyMode: VerifyMode;
+  url?: string;
   bugDescription: string;
   model: string;
   reviewer: string;

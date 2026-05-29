@@ -10,4 +10,9 @@ export {
 } from "./mcp/chrome.js";
 export { runSetup, exitCodeForReport } from "./setup/run-setup.js";
 export { runAllChecks } from "./setup/checks.js";
+export { runUpgrade, exitCodeForUpgrade, detectInstallKind } from "./setup/upgrade.js";
+export type { UpgradeOptions, UpgradeResult, InstallKind } from "./setup/upgrade.js";
+export { resolveVerifyTarget, readPackageScripts } from "./debug/verify-target.js";
+export type { VerifyTarget } from "./debug/verify-target.js";
+export { getVersion, getPackageRoot, readPackageInfo } from "./version.js";
 export type { CheckResult, SetupReport } from "./setup/types.js";

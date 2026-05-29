@@ -4,6 +4,7 @@ const mockReport = {
   runId: "smoke01",
   sessionId: "test-session",
   repoPath: "/tmp/demo-repo",
+  verifyMode: "browser",
   url: "http://localhost:3000",
   bugDescription: "Save button shows blank modal",
   status: "fixed",
@@ -28,6 +29,7 @@ const mockReport = {
     sentinelCountAfter: 0,
   },
   reproduction: {
+    mode: "browser",
     url: "http://localhost:3000",
     steps: ["Open app", "Click Save", "Observe blank modal"],
     logEntries: [{ hypothesis: "H1", value: { open: false } }],

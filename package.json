@@ -14,11 +14,37 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "prepack": "npm run build",
+    "pack:tarball": "npm pack",
     "smoke:acp": "node scripts/smoke-acp.mjs",
     "smoke:report": "node scripts/smoke-report.mjs",
+    "smoke:version": "node scripts/smoke-version.mjs",
     "setup": "node dist/cli.js setup",
-    "debug:setup": "node dist/cli.js setup"
+    "debug:setup": "node dist/cli.js setup",
+    "fixture:list": "node scripts/todo-fixture.mjs list",
+    "fixture:reset": "node scripts/todo-fixture.mjs reset --force",
+    "fixture:serve": "node scripts/todo-fixture.mjs serve",
+    "fixture:accept": "node scripts/todo-fixture.mjs accept",
+    "fixture:accept:unit": "node scripts/todo-fixture.mjs accept --unit-only",
+    "fixture:accept:e2e": "node scripts/todo-fixture.mjs accept --e2e-only",
+    "fixture:run:one": "node scripts/todo-fixture.mjs run one",
+    "fixture:run:all": "node scripts/todo-fixture.mjs run all --interactive",
+    "fixture:run:all:auto": "node scripts/todo-fixture.mjs run all --auto"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "AGENTS.md",
+    "docs"
+  ],
+  "keywords": [
+    "cursor",
+    "acp",
+    "debug",
+    "debugger",
+    "chrome-devtools"
+  ],
+  "license": "MIT",
   "engines": {
     "node": ">=20"
   },

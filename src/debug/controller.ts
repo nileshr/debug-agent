@@ -16,6 +16,7 @@ import {
   extractJsonFromText,
   getPromptForPhase,
 } from "./prompts.js";
+import type { VerifyMode } from "./types.js";
 import {
   FinalReportSchema,
   type FinalReport,
@@ -28,7 +29,8 @@ import type { CursorUpdateTodosParams } from "../acp/types.js";
 
 export interface ControllerOptions {
   repoPath: string;
-  url: string;
+  verifyMode: VerifyMode;
+  url?: string;
   bugDescription: string;
   model?: string;
   reviewer?: string;
@@ -83,6 +85,7 @@ export class DebugLoopController {
       runId,
       sessionId: "",
       repoPath,
+      verifyMode: this.options.verifyMode,
       url: this.options.url,
       bugDescription: this.options.bugDescription,
       model: this.options.model,
@@ -105,7 +108,9 @@ export class DebugLoopController {
 
     fs.mkdirSync(path.join(repoPath, ".cursor"), { recursive: true });
     fs.mkdirSync(path.join(repoPath, ".cursor", "debug-runs"), { recursive: true });
-    ensureChromeDevToolsMcpConfig(repoPath);
+    if (this.options.verifyMode === "browser") {
+      ensureChromeDevToolsMcpConfig(repoPath);
+    }
 
     try {
       await this.client.start();
@@ -174,13 +179,20 @@ export class DebugLoopController {
         case "reproduce":
           this.logSinceTs = Date.now();
           await this.sendPhasePrompt("reproduce");
-          const entries = await waitForDebugLog({
-            repoPath: this.ledger.repoPath,
-            sinceTs: this.logSinceTs - 60_000,
-            minEntries: 1,
-            timeoutMs: 90_000,
-          });
-          this.ledger.logEntries = entries;
+          if (this.ledger.verifyMode === "browser") {
+            const entries = await waitForDebugLog({
+              repoPath: this.ledger.repoPath,
+              sinceTs: this.logSinceTs - 60_000,
+              minEntries: 1,
+              timeoutMs: 90_000,
+            });
+            this.ledger.logEntries = entries;
+          } else {
+            this.ledger.logEntries = readDebugLogSince(
+              this.ledger.repoPath,
+              this.logSinceTs - 60_000,
+            );
+          }
           phase = "analyze";
           break;
 
@@ -381,6 +393,7 @@ export class DebugLoopController {
       runId: this.ledger.runId,
       sessionId: this.ledger.sessionId,
       repoPath: this.ledger.repoPath,
+      verifyMode: this.ledger.verifyMode,
       url: this.ledger.url,
       bugDescription: this.ledger.bugDescription,
       status: this.ledger.status === "running" ? "partial" : this.ledger.status,
@@ -396,6 +409,7 @@ export class DebugLoopController {
         sentinelCountAfter: this.ledger.sentinelCountAfter,
       },
       reproduction: {
+        mode: this.ledger.verifyMode,
         url: this.ledger.url,
         steps: this.ledger.reproductionSteps,
         logEntries: this.ledger.logEntries,

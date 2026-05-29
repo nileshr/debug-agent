@@ -67,6 +67,64 @@ npm run smoke:report
 npm run setup
 ```
 
+## Todo fixture (maintainer harness)
+
+Dev-only resettable Vite React todo app for verifying debug-agent against known bugs.
+
+```bash
+# Prepare disposable workdir from seed
+npm run fixture:reset
+
+# Manual inspection (http://localhost:5199)
+npm run fixture:serve
+
+# List seeded bugs and symptom text
+npm run fixture:list
+
+# Run debug-agent on one bug (fresh reset each time)
+npm run fixture:run:one -- add-todo
+
+# Run all bugs in order (--interactive pauses between bugs)
+npm run fixture:run:all
+npm run fixture:run:all:auto
+
+# Maintainer acceptance (fails on broken baseline, passes when fixed)
+npm run fixture:accept
+```
+
+| Path | Role |
+|------|------|
+| `examples/todo-fixture/seed/` | Committed broken app |
+| `.tmp/todo-fixture-workdir/` | Disposable copy passed to `debug` |
+| `examples/todo-fixture/bugs.json` | Symptom-only manifest for `--bug` |
+| `examples/todo-fixture/maintainer/` | Expected behavior + Vitest/Playwright oracle |
+| `scripts/todo-fixture.mjs` | reset / serve / run / accept |
+
+Override debugger binary: `DEBUG_BIN=debug npm run fixture:run:one -- add-todo` (default uses local `dist/cli.js`).
+
+See [examples/todo-fixture/README.md](./examples/todo-fixture/README.md).
+
+## Version and upgrade
+
+```bash
+debug -v
+debug -V
+debug upgrade --check
+debug upgrade
+```
+
+## Install on other computers
+
+See **[docs/INSTALL.md](./docs/INSTALL.md)** for npm publish, offline `.tgz`, git clone, and `npm link`.
+
+Quick tarball:
+
+```bash
+npm run build && npm pack
+# copy debug-agent-*.tgz to target machine:
+npm install -g ./debug-agent-0.1.0.tgz
+```
+
 ## More detail
 
 See [AGENTS.md](./AGENTS.md).

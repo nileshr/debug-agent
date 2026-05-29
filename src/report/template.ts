@@ -125,7 +125,7 @@ export function renderReportHtml(report: FinalReport): string {
       · ${report.cycles} cycle(s)
     </p>
     <p class="meta">Repo: <code>${esc(report.repoPath)}</code></p>
-    <p class="meta">URL: ${esc(report.url)}</p>
+    <p class="meta">Verify: ${esc(report.verifyMode)}${report.url ? ` · ${esc(report.url)}` : ""}</p>
     <p class="meta">Session: ${esc(report.sessionId)}</p>
   </header>
 
@@ -155,7 +155,7 @@ export function renderReportHtml(report: FinalReport): string {
 
   ${
     report.reproduction.steps.length
-      ? `<section><h2>Reproduction</h2><p>${esc(report.reproduction.url)}</p><ol>${reproSteps}</ol></section>`
+      ? `<section><h2>Reproduction</h2><p>${report.reproduction.mode === "browser" && report.reproduction.url ? esc(report.reproduction.url) : "CLI / shell"}</p><ol>${reproSteps}</ol></section>`
       : ""
   }
 

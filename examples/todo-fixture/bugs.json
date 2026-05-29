@@ -1,0 +1,35 @@
+{
+  "url": "http://localhost:5199",
+  "bugs": [
+    {
+      "id": "add-todo",
+      "order": 1,
+      "category": "obvious",
+      "symptom": "Typing a todo and clicking Add (or pressing Enter) does not add the item to the list. The input may clear or stay filled, but no new todo appears."
+    },
+    {
+      "id": "filter-tabs",
+      "order": 2,
+      "category": "obvious",
+      "symptom": "Clicking Active or Completed filter tabs does not change which todos are shown. All todos remain visible regardless of the selected filter."
+    },
+    {
+      "id": "toggle-persist",
+      "order": 3,
+      "category": "subtle",
+      "symptom": "Marking a todo complete works in the UI, but after refreshing the page the completion state is wrong (completed todos appear active again, or active todos appear completed)."
+    },
+    {
+      "id": "inline-edit",
+      "order": 4,
+      "category": "subtle",
+      "symptom": "Double-clicking a todo to edit and then clicking away (blur) does not save the edited text. The todo reverts to its previous label unless you press Enter."
+    },
+    {
+      "id": "clear-completed",
+      "order": 5,
+      "category": "subtle",
+      "symptom": "Clicking Clear completed removes completed todos but also removes active todos that should remain."
+    }
+  ]
+}

@@ -25,5 +25,13 @@ Thumbs.db
 # Test / coverage
 coverage/
 
+# Todo fixture disposable workdir and run artifacts
+.tmp/
+examples/todo-fixture/.runs/
+examples/todo-fixture/maintainer/node_modules/
+examples/todo-fixture/maintainer/test-results/
+examples/todo-fixture/maintainer/playwright-report/
+examples/todo-fixture/seed/node_modules/
+
 # Local reports (generated at runtime in home dir, not in repo)
 # ~/.debug-agent/reports/ is outside this repo
