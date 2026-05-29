@@ -85,6 +85,8 @@ function parseLedger(json: string): RunLedger {
   const raw = JSON.parse(json) as RunLedger;
   return {
     ...raw,
+    plannerModel: raw.plannerModel ?? raw.model,
+    browserMcp: raw.browserMcp ?? "chrome-devtools",
     streamBuffer: "",
     transcript: raw.transcript ?? [],
     trace: raw.trace ?? [],

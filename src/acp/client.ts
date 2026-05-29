@@ -25,6 +25,7 @@ import {
   permissionResponse,
   type PermissionPolicyOptions,
 } from "../permissions.js";
+import { resolveSpawnCwd } from "../util/cwd.js";
 
 export interface StreamUpdate {
   text: string;
@@ -41,6 +42,8 @@ export interface AcpClientOptions {
   agentCommand?: string;
   agentArgs?: string[];
   requestTimeoutMs?: number;
+  /** cwd for the `agent acp` child process (defaults to a safe writable directory) */
+  spawnCwd?: string;
   permissionPolicy?: PermissionPolicyOptions;
   onStdoutChunk?: (text: string) => void;
   onTrace?: (event: TraceEvent) => void;
@@ -69,6 +72,7 @@ export class AcpClient extends EventEmitter {
     if (this.child) return;
 
     this.child = spawn(this.options.agentCommand, this.options.agentArgs, {
+      cwd: this.options.spawnCwd ?? resolveSpawnCwd(),
       stdio: ["pipe", "pipe", "pipe"],
     });
 

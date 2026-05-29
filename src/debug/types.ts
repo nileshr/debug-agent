@@ -117,8 +117,12 @@ export interface RunLedger {
   verifyMode: VerifyMode;
   url?: string;
   bugDescription: string;
+  /** Fixer model (most phases). */
   model: string;
+  plannerModel: string;
+  /** Reviewer model (review phase). */
   reviewer: string;
+  browserMcp?: "chrome-devtools" | "playwright";
   startedAt: number;
   phase: Phase;
   cycles: number;

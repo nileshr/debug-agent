@@ -12,9 +12,9 @@ export const DebugLogEntrySchema = z.object({
 
 export type DebugLogEntry = z.infer<typeof DebugLogEntrySchema>;
 
-export function debugLogPath(repoPath: string): string {
-  return path.join(repoPath, ".cursor", "debug.log");
-}
+import { debugLogPath } from "./repo-paths.js";
+
+export { debugLogPath };
 
 export function readDebugLogSince(
   repoPath: string,
@@ -62,7 +62,7 @@ export interface WaitForLogOptions {
   pollIntervalMs?: number;
 }
 
-/** Poll `.cursor/debug.log` until minEntries or timeout. */
+/** Poll `.debug-agent/debug.log` until minEntries or timeout. */
 export async function waitForDebugLog(
   options: WaitForLogOptions,
 ): Promise<DebugLogEntry[]> {

@@ -1,4 +1,6 @@
 import type { Hypothesis, RunLedger } from "./types.js";
+import { browserMcpLabel } from "../mcp/browser.js";
+import { debugLogPath } from "./repo-paths.js";
 import { readPackageScripts } from "./verify-target.js";
 
 export const SUMMARY_JSON_SCHEMA = `{
@@ -28,7 +30,8 @@ function hypothesesBlock(hypotheses: Hypothesis[]): string {
 
 function verificationBlock(ledger: RunLedger): string {
   if (ledger.verifyMode === "browser") {
-    return `Verification: browser (chrome-devtools MCP)\nApp URL: ${ledger.url ?? "(not set)"}`;
+    const mcp = browserMcpLabel(ledger.browserMcp ?? "chrome-devtools");
+    return `Verification: browser (${mcp})\nApp URL: ${ledger.url ?? "(not set)"}`;
   }
   const scripts = readPackageScripts(ledger.repoPath);
   const scriptLines = scripts
@@ -72,7 +75,7 @@ Run ID: ${ledger.runId}
 Hypotheses:
 ${hypothesesBlock(ledger.hypotheses)}
 
-Add minimal JSONL logging to: ${ledger.repoPath}/.cursor/debug.log
+Add minimal JSONL logging to: ${debugLogPath(ledger.repoPath)}
 
 Each log line MUST be one JSON object:
 {"hypothesis":"H#","file":"relative/path","line":N,"value":<any>,"ts":<unix-ms>}
@@ -100,24 +103,25 @@ Bug: ${ledger.bugDescription}
 Steps:
 1. Run the CLI command(s) that trigger the bug (build, test, or direct bin invocation).
 2. Capture stdout/stderr and exit codes.
-3. If instrumentation was added, check ${ledger.repoPath}/.cursor/debug.log for runtime data.
+3. If instrumentation was added, check ${debugLogPath(ledger.repoPath)} for runtime data.
 
 When done, reply with:
 \`\`\`json
 {"steps":["npm run build","node dist/cli.js -V"],"logCaptured":true}
 \`\`\``;
   }
+  const mcp = browserMcpLabel(ledger.browserMcp ?? "chrome-devtools");
   return `DEBUG emulation — REPRODUCE phase.
 
-Use the chrome-devtools MCP server to reproduce the bug.
+Use ${mcp} to reproduce the bug.
 
 URL: ${ledger.url}
 Bug: ${ledger.bugDescription}
 
 Steps:
-1. Open the URL in Chrome via chrome-devtools MCP.
+1. Open the URL in the browser via ${mcp}.
 2. Perform actions that trigger the bug.
-3. Confirm runtime data was written to ${ledger.repoPath}/.cursor/debug.log
+3. Confirm runtime data was written to ${debugLogPath(ledger.repoPath)}
 
 When done, reply with:
 \`\`\`json
@@ -132,7 +136,7 @@ export function promptAnalyze(ctx: PromptContext): string {
 Hypotheses:
 ${hypothesesBlock(ledger.hypotheses)}
 
-Read ${ledger.repoPath}/.cursor/debug.log entries since ts=${sinceTs ?? 0}.
+Read ${debugLogPath(ledger.repoPath)} entries since ts=${sinceTs ?? 0}.
 
 Log snippet:
 ${logSnippet ?? "(read the file)"}
@@ -179,9 +183,10 @@ If it still fails:
 {"verified":false,"reason":"..."}
 \`\`\``;
   }
+  const mcp = browserMcpLabel(ledger.browserMcp ?? "chrome-devtools");
   return `DEBUG emulation — VERIFY phase.
 
-Reproduce the bug scenario using chrome-devtools MCP at ${ledger.url}.
+Reproduce the bug scenario using ${mcp} at ${ledger.url}.
 The fix should prevent the original failure.
 
 If verification passes:
@@ -202,7 +207,7 @@ export function promptMarkFixed(ctx: PromptContext): string {
 Bug is verified fixed. Remove ALL lines/edits containing:
 // DEBUG-INSTRUMENT:${ledger.runId}
 
-Delete ${ledger.repoPath}/.cursor/debug.log if it only contains debug instrumentation data.
+Delete ${debugLogPath(ledger.repoPath)} if it only contains debug instrumentation data.
 Do not revert the actual bug fix.
 
 Reply with:

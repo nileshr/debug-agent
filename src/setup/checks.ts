@@ -4,8 +4,13 @@ import os from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { AcpClient } from "../acp/client.js";
-import { acpMcpServersParam } from "../mcp/chrome.js";
+import { acpMcpServersParam } from "../mcp/browser.js";
 import { REPORTS_DIR } from "../report/emit.js";
+import {
+  isDirectoryAccessible,
+  resolveSpawnCwd,
+  tryProcessCwd,
+} from "../util/cwd.js";
 import type { CheckResult } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -47,9 +52,13 @@ async function runCommand(
   cmd: string,
   args: string[],
   timeoutMs = 15_000,
+  cwd = resolveSpawnCwd(),
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     child.stdout?.on("data", (c) => (stdout += c.toString()));
@@ -67,6 +76,26 @@ async function runCommand(
       resolve({ ok: false, stdout, stderr });
     });
   });
+}
+
+export async function checkWorkingDirectory(
+  repoPath?: string,
+): Promise<CheckResult> {
+  const cwd = tryProcessCwd();
+  if (cwd && isDirectoryAccessible(cwd)) {
+    return pass("cwd", "Working directory", cwd);
+  }
+
+  const fallback = resolveSpawnCwd(repoPath);
+  const message = cwd
+    ? `Cannot access ${cwd} (permission denied)`
+    : "Current directory unavailable (EPERM)";
+  return warn(
+    "cwd",
+    "Working directory",
+    message,
+    `cd to an accessible folder or pass --repo. Commands run with cwd ${fallback}.`,
+  );
 }
 
 export async function checkNode(): Promise<CheckResult> {
@@ -94,16 +123,19 @@ export async function checkAgentCli(): Promise<CheckResult> {
   }
 
   const ver = await runCommand("agent", ["--version"], 10_000);
-  const version = ver.stdout.trim() || ver.stderr.trim() || "unknown";
-  if (!ver.ok && !version) {
-    return warn(
-      "agent-cli",
-      "Cursor CLI (`agent`)",
-      `Found at ${agentPath} but could not read version`,
-      "Run `agent --version` manually. If it fails, reinstall the CLI.",
-    );
+  const version = ver.stdout.trim();
+  if (ver.ok && version) {
+    return pass("agent-cli", "Cursor CLI (`agent`)", `${agentPath} (${version})`);
   }
-  return pass("agent-cli", "Cursor CLI (`agent`)", `${agentPath} (${version})`);
+  const detail = (ver.stderr || ver.stdout).trim().slice(0, 160);
+  return warn(
+    "agent-cli",
+    "Cursor CLI (`agent`)",
+    detail
+      ? `Found at ${agentPath} but \`agent --version\` failed: ${detail}`
+      : `Found at ${agentPath} but could not read version`,
+    "Run `agent --version` from an accessible directory. If cwd is restricted, cd elsewhere and retry.",
+  );
 }
 
 export async function checkAuth(): Promise<CheckResult> {
@@ -133,8 +165,11 @@ export async function checkAuth(): Promise<CheckResult> {
   );
 }
 
-export async function checkAcpAuth(): Promise<CheckResult> {
-  const client = new AcpClient({ requestTimeoutMs: 25_000 });
+export async function checkAcpAuth(repoPath?: string): Promise<CheckResult> {
+  const client = new AcpClient({
+    requestTimeoutMs: 25_000,
+    spawnCwd: resolveSpawnCwd(repoPath),
+  });
   try {
     await client.start();
     await client.initialize();
@@ -153,14 +188,18 @@ export async function checkAcpAuth(): Promise<CheckResult> {
   }
 }
 
-export async function checkAcpModes(): Promise<CheckResult> {
-  const client = new AcpClient({ requestTimeoutMs: 25_000 });
+export async function checkAcpModes(repoPath?: string): Promise<CheckResult> {
+  const sessionCwd = resolveSpawnCwd(repoPath);
+  const client = new AcpClient({
+    requestTimeoutMs: 25_000,
+    spawnCwd: sessionCwd,
+  });
   try {
     await client.start();
     await client.initialize();
     await client.authenticate();
     const session = await client.sessionNew({
-      cwd: process.cwd(),
+      cwd: sessionCwd,
       mcpServers: acpMcpServersParam(),
     });
     const modes =
@@ -315,7 +354,7 @@ export async function checkRepoMcp(repoPath: string): Promise<CheckResult> {
       "repo-mcp",
       "Repo MCP config",
       `No ${mcpPath} yet`,
-      "First `debug run` will add chrome-devtools to .cursor/mcp.json automatically.",
+      "First browser `debug run` adds chrome-devtools or playwright to .cursor/mcp.json (see `debug config`).",
     );
   }
 
@@ -323,19 +362,27 @@ export async function checkRepoMcp(repoPath: string): Promise<CheckResult> {
     const config = JSON.parse(fs.readFileSync(mcpPath, "utf8")) as {
       mcpServers?: Record<string, { command?: string; args?: string[] }>;
     };
-    const entry = config.mcpServers?.["chrome-devtools"];
-    if (entry?.command === "npx") {
+    const chrome = config.mcpServers?.["chrome-devtools"];
+    const playwright = config.mcpServers?.["playwright"];
+    if (chrome?.command === "npx") {
       return pass(
         "repo-mcp",
         "Repo MCP config",
         `chrome-devtools configured in .cursor/mcp.json`,
       );
     }
+    if (playwright?.command === "npx") {
+      return pass(
+        "repo-mcp",
+        "Repo MCP config",
+        `playwright configured in .cursor/mcp.json`,
+      );
+    }
     return warn(
       "repo-mcp",
       "Repo MCP config",
-      "mcp.json exists but chrome-devtools entry missing or different",
-      'Add: "chrome-devtools": { "command": "npx", "args": ["-y", "chrome-devtools-mcp@latest"] }',
+      "mcp.json exists but no chrome-devtools or playwright npx entry",
+      'Add chrome-devtools or playwright per `debug config` / docs/INSTALL.md.',
     );
   } catch (err) {
     return fail(
@@ -358,6 +405,7 @@ export async function runAllChecks(
 ): Promise<CheckResult[]> {
   const checks: CheckResult[] = [];
 
+  checks.push(await checkWorkingDirectory(options.repoPath));
   checks.push(await checkNode());
   checks.push(await checkAgentCli());
   checks.push(await checkAuth());
@@ -367,8 +415,8 @@ export async function runAllChecks(
   checks.push(await checkReportsDir());
 
   if (!options.skipAcpProbe) {
-    checks.push(await checkAcpAuth());
-    checks.push(await checkAcpModes());
+    checks.push(await checkAcpAuth(options.repoPath));
+    checks.push(await checkAcpModes(options.repoPath));
   }
 
   if (options.repoPath) {

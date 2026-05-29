@@ -92,7 +92,7 @@ function resetWorkdir({ force = false } = {}) {
   copyDir(SEED_DIR, WORKDIR);
 
   // Clear any stale debug artifacts if present
-  removeDir(path.join(WORKDIR, ".cursor"));
+  removeDir(path.join(WORKDIR, ".debug-agent"));
 
   console.log("Installing fixture dependencies...");
   run("npm", ["install"], { cwd: WORKDIR });

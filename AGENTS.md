@@ -10,8 +10,10 @@ TypeScript CLI (`debug` / `debug-agent` bins) that speaks **Cursor ACP** (`agent
 | `src/acp/types.ts` | Zod schemas for RPC payloads |
 | `src/debug/controller.ts` | Phase state machine |
 | `src/debug/prompts.ts` | Per-phase prompt templates + JSON extraction |
-| `src/debug/log-tail.ts` | `.cursor/debug.log` JSONL reader / waiter |
-| `src/mcp/chrome.ts` | Ensures `chrome-devtools` in repo `.cursor/mcp.json`; ACP uses `mcpServers: []` |
+| `src/debug/repo-paths.ts` | Repo-local `.debug-agent/` paths (config, log, ledgers) |
+| `src/debug/log-tail.ts` | `.debug-agent/debug.log` JSONL reader / waiter |
+| `src/config/` | Agent prefs: models (planner/fixer/reviewer), browser MCP; global + repo overrides |
+| `src/mcp/browser.ts` | Ensures selected browser MCP in repo `.cursor/mcp.json`; ACP uses `mcpServers: []` |
 | `src/permissions.ts` | Auto-allow repo + chrome-devtools tools |
 | `src/report/` | Self-contained HTML → `~/.debug-agent/reports/` |
 | `src/setup/` | `debug setup` prerequisite checks |
@@ -32,9 +34,13 @@ TypeScript CLI (`debug` / `debug-agent` bins) that speaks **Cursor ACP** (`agent
 `hypothesize` (plan) → `instrument` → `reproduce` → `analyze` → `apply_fix` → `verify` → (`mark_fixed` | retry) → `review` → `apply_review` → `re_verify` → `summarize`
 
 - Instrumentation sentinel: `// DEBUG-INSTRUMENT:<runId>`
-- Runtime log: `<repo>/.cursor/debug.log` (JSONL)
-- Run ledger: `<repo>/.cursor/debug-runs/<runId>.json`
+- Runtime log: `<repo>/.debug-agent/debug.log` (JSONL)
+- Run ledger: `<repo>/.debug-agent/debug-runs/<runId>.json`
 - Run state DB: `~/.debug-agent/state.db` (SQLite: per-phase status + ledger snapshot for crash resume)
+- Agent config: `~/.debug-agent/config.json` (global); optional `<repo>/.debug-agent/config.json` (overrides global)
+- Cursor MCP stays in `<repo>/.cursor/mcp.json` (ACP requirement)
+- Default models: planner `claude-opus-4-8-thinking-high`, fixer `composer-2.5[fast=true]`, reviewer `gpt-5.4-xhigh`
+- Browser MCP: `chrome-devtools` (default) or `playwright` (`@playwright/mcp`)
 
 ## Commands
 
@@ -54,7 +60,10 @@ debug run <repo> --bug "..." --url "http://..."
 debug run <repo> --session <sessionId> --bug "..."   # resume ACP session only (no phase DB)
 debug resume [repo] [--run <id>]                     # resume interrupted run (phase + ledger + session)
 debug runs [--repo <path>] [--status interrupted]    # list runs from state DB
+debug config [show|init|set]                         # agent model + browser MCP prefs
 ```
+
+First run with no config files opens an interactive picker (TTY); saves `~/.debug-agent/config.json`. Per-phase ACP model switches: hypothesize → planner, review → reviewer, else → fixer.
 
 - Setup: `src/setup/checks.ts`, `src/setup/run-setup.ts`
 - Upgrade: `src/setup/upgrade.ts`, `src/setup/github-release.ts`
@@ -73,7 +82,7 @@ Resettable verification harness for debug-agent versions:
 
 `run one` resets before each bug; `run all` resets once then fixes cumulatively. Default runner builds and uses local `dist/cli.js`; set `DEBUG_BIN=debug` to use installed CLI.
 
-Reset clears stale `.cursor/debug.log` and `.cursor/debug-runs/` from prior runs.
+Reset clears stale `<repo>/.debug-agent/` from prior runs.
 
 ## Conventions
 

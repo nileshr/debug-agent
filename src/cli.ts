@@ -7,6 +7,11 @@ import { resolveVerifyTarget } from "./debug/verify-target.js";
 import { runSetup, exitCodeForReport } from "./setup/run-setup.js";
 import { runUpgrade, exitCodeForUpgrade } from "./setup/upgrade.js";
 import { getVersion } from "./version.js";
+import { registerConfigCommand } from "./config/cli-config.js";
+import { ensureAgentConfig } from "./config/ensure.js";
+import { resolveAgentConfig } from "./config/resolve.js";
+import { formatResolvedConfig } from "./config/show.js";
+import type { AgentConfigOverrides } from "./config/types.js";
 
 const program = new Command();
 
@@ -14,6 +19,7 @@ const program = new Command();
 const TOP_LEVEL_COMMANDS = new Set([
   "setup",
   "upgrade",
+  "config",
   "run",
   "resume",
   "runs",
@@ -69,6 +75,8 @@ program
     });
     process.exit(exitCodeForReport(report));
   });
+
+registerConfigCommand(program);
 
 program
   .command("upgrade")
@@ -167,13 +175,18 @@ program
     await runDebugAgent(repoPath, {
       bug: loaded.bugDescription,
       verifyTarget,
-      model: loaded.model,
-      reviewer: loaded.reviewer,
+      configOverrides: {
+        fixer: loaded.model,
+        planner: loaded.ledger.plannerModel ?? loaded.model,
+        reviewer: loaded.reviewer,
+        browserMcp: loaded.ledger.browserMcp,
+      },
       maxCycles: String(loaded.maxCycles),
       report: opts.report !== false,
       noOpen: opts.noOpen,
       session: loaded.sessionId,
       resumeRunId: runId,
+      noConfigPrompt: true,
     });
   });
 
@@ -186,8 +199,11 @@ program
   )
   .option("--bug <description>", "Bug description")
   .option("--url <url>", "App URL for browser verification (omit for CLI/shell verification)")
-  .option("--model <id>", "ACP model id", "composer-2.5[fast=true]")
-  .option("--reviewer <name>", "Review subagent label", "code-review")
+  .option("--model <id>", "Fixer ACP model (overrides config)")
+  .option("--planner-model <id>", "Planner model for hypothesize phase")
+  .option("--reviewer-model <id>", "Reviewer model for review phase")
+  .option("--browser-mcp <kind>", "chrome-devtools | playwright (browser verify)")
+  .option("--no-config-prompt", "Skip first-run interactive config picker")
   .option("--max-cycles <n>", "Max verify/fix cycles", "5")
   .option("--no-report", "Skip HTML report generation")
   .option("--no-open", "Print file:// link only; do not open browser")
@@ -245,10 +261,14 @@ async function runDebugAgent(
     bug: string;
     verifyTarget: ReturnType<typeof resolveVerifyTarget>;
     model?: string;
-    reviewer?: string;
+    plannerModel?: string;
+    reviewerModel?: string;
+    browserMcp?: string;
+    configOverrides?: AgentConfigOverrides;
     maxCycles?: string;
     report?: boolean;
     noOpen?: boolean;
+    noConfigPrompt?: boolean;
     session?: string;
     resumeRunId?: string;
   },
@@ -261,6 +281,22 @@ async function runDebugAgent(
 
   const openReport = !opts.noOpen;
 
+  await ensureAgentConfig({
+    repoPath,
+    noPrompt: opts.noConfigPrompt,
+  });
+
+  const overrides: AgentConfigOverrides = {
+    ...opts.configOverrides,
+    fixer: opts.model ?? opts.configOverrides?.fixer,
+    planner: opts.plannerModel ?? opts.configOverrides?.planner,
+    reviewer: opts.reviewerModel ?? opts.configOverrides?.reviewer,
+    browserMcp:
+      (opts.browserMcp as AgentConfigOverrides["browserMcp"] | undefined) ??
+      opts.configOverrides?.browserMcp,
+  };
+  const agentConfig = resolveAgentConfig({ repoPath, overrides });
+
   console.log(chalk.bold("debug-agent (ACP + emulated Debug Mode)"));
   console.log(chalk.dim(`Repo: ${repoPath}`));
   if (opts.verifyTarget.mode === "browser") {
@@ -268,6 +304,7 @@ async function runDebugAgent(
   } else {
     console.log(chalk.dim("Verify: CLI (shell commands, no browser)"));
   }
+  console.log(formatResolvedConfig(agentConfig, repoPath));
   console.log(
     chalk.dim(`Tip: run \`debug setup --repo ${repoPath}\` to verify prerequisites.\n`),
   );
@@ -278,8 +315,7 @@ async function runDebugAgent(
       verifyMode: opts.verifyTarget.mode,
       url: opts.verifyTarget.url,
       bugDescription: opts.bug,
-      model: opts.model,
-      reviewer: opts.reviewer,
+      agentConfig,
       maxCycles,
       writeReport: opts.report !== false,
       openReport,

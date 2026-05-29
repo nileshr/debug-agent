@@ -4,14 +4,17 @@ import { randomUUID } from "node:crypto";
 import ora, { type Ora } from "ora";
 import chalk from "chalk";
 import { AcpClient } from "../acp/client.js";
-import { acpMcpServersParam, ensureChromeDevToolsMcpConfig } from "../mcp/chrome.js";
+import type { ResolvedAgentConfig } from "../config/types.js";
+import { modelForPhase } from "../config/resolve.js";
+import { acpMcpServersParam, ensureBrowserMcpConfig } from "../mcp/browser.js";
+import { resolveSpawnCwd } from "../util/cwd.js";
 import {
   countSentinels,
-  debugLogPath,
   groupByHypothesis,
   readDebugLogSince,
   waitForDebugLog,
 } from "./log-tail.js";
+import { debugLogPath, debugRunsDir, debugRunLedgerPath } from "./repo-paths.js";
 import {
   extractJsonFromText,
   getPromptForPhase,
@@ -41,8 +44,7 @@ export interface ControllerOptions {
   verifyMode: VerifyMode;
   url?: string;
   bugDescription: string;
-  model?: string;
-  reviewer?: string;
+  agentConfig: ResolvedAgentConfig;
   maxCycles?: number;
   writeReport?: boolean;
   openReport?: boolean;
@@ -62,9 +64,10 @@ export interface ControllerResult {
 export class DebugLoopController {
   private client: AcpClient;
   private readonly options: Required<
-    Pick<ControllerOptions, "model" | "reviewer" | "maxCycles" | "writeReport" | "openReport">
+    Pick<ControllerOptions, "maxCycles" | "writeReport" | "openReport">
   > &
     ControllerOptions;
+  private activeModel = "";
   private ledger!: RunLedger;
   private sessionId!: string;
   private spinner: Ora | null = null;
@@ -75,14 +78,14 @@ export class DebugLoopController {
 
   constructor(options: ControllerOptions) {
     this.options = {
-      model: options.model ?? "composer-2.5[fast=true]",
-      reviewer: options.reviewer ?? "code-review",
       maxCycles: options.maxCycles ?? 5,
       writeReport: options.writeReport ?? true,
       openReport: options.openReport ?? true,
       ...options,
     };
+    this.activeModel = options.agentConfig.models.fixer;
     this.client = new AcpClient({
+      spawnCwd: resolveSpawnCwd(options.repoPath),
       permissionPolicy: { repoPath: path.resolve(options.repoPath) },
       onStdoutChunk: (text) => {
         if (this.ledger) {
@@ -126,6 +129,17 @@ export class DebugLoopController {
         );
       }
       this.ledger = { ...loaded.ledger, status: "running", streamBuffer: "" };
+      this.options.agentConfig = {
+        ...this.options.agentConfig,
+        models: {
+          planner: this.ledger.plannerModel ?? this.ledger.model,
+          fixer: this.ledger.model,
+          reviewer: this.ledger.reviewer,
+        },
+        browserMcp:
+          this.ledger.browserMcp ?? this.options.agentConfig.browserMcp,
+      };
+      this.activeModel = "";
       startPhase =
         loaded.nextPhase === "done" ? "summarize" : loaded.nextPhase;
       this.options.resumeSessionId =
@@ -147,8 +161,10 @@ export class DebugLoopController {
         verifyMode: this.options.verifyMode,
         url: this.options.url,
         bugDescription: this.options.bugDescription,
-        model: this.options.model,
-        reviewer: this.options.reviewer,
+        model: this.options.agentConfig.models.fixer,
+        plannerModel: this.options.agentConfig.models.planner,
+        reviewer: this.options.agentConfig.models.reviewer,
+        browserMcp: this.options.agentConfig.browserMcp,
         startedAt: Date.now(),
         phase: "hypothesize",
         cycles: 0,
@@ -172,18 +188,17 @@ export class DebugLoopController {
           bugDescription: this.options.bugDescription,
           verifyMode: this.options.verifyMode,
           url: this.options.url,
-          model: this.options.model,
-          reviewer: this.options.reviewer,
+          model: this.options.agentConfig.models.fixer,
+          reviewer: this.options.agentConfig.models.reviewer,
           maxCycles: this.options.maxCycles,
         },
         this.ledger,
       );
     }
 
-    fs.mkdirSync(path.join(repoPath, ".cursor"), { recursive: true });
-    fs.mkdirSync(path.join(repoPath, ".cursor", "debug-runs"), { recursive: true });
+    fs.mkdirSync(debugRunsDir(repoPath), { recursive: true });
     if (this.options.verifyMode === "browser") {
-      ensureChromeDevToolsMcpConfig(repoPath);
+      ensureBrowserMcpConfig(repoPath, this.options.agentConfig.browserMcp);
     }
 
     const onSignal = (): void => {
@@ -229,7 +244,7 @@ export class DebugLoopController {
       );
       console.log(chalk.dim(`Run: ${this.ledger.runId}`));
 
-      await this.client.setModel(this.sessionId, this.options.model);
+      await this.applyModelForPhase(startPhase);
 
       this.client.onUpdateTodos((params) => this.handleTodos(params));
 
@@ -277,6 +292,7 @@ export class DebugLoopController {
 
     while (phase !== "done") {
       this.ledger.phase = phase;
+      await this.applyModelForPhase(phase);
       store.recordPhaseStart(this.ledger.runId, phase, this.ledger);
       this.options.onPhase?.(phase);
       this.trace.setPhase(phase);
@@ -406,6 +422,16 @@ export class DebugLoopController {
     }
   }
 
+  private async applyModelForPhase(phase: Phase): Promise<void> {
+    const modelId = modelForPhase(phase, this.options.agentConfig.models);
+    if (modelId === this.activeModel) return;
+    await this.client.setModel(this.sessionId, modelId);
+    this.activeModel = modelId;
+    this.ledger.model = this.options.agentConfig.models.fixer;
+    this.ledger.plannerModel = this.options.agentConfig.models.planner;
+    this.ledger.reviewer = this.options.agentConfig.models.reviewer;
+  }
+
   private async sendPhasePrompt(phase: Phase): Promise<void> {
     const stored = this.ledger.logEntries as ReturnType<typeof readDebugLogSince>;
     const logSnippet =
@@ -519,12 +545,7 @@ export class DebugLoopController {
   }
 
   private persistLedger(): void {
-    const outPath = path.join(
-      this.ledger.repoPath,
-      ".cursor",
-      "debug-runs",
-      `${this.ledger.runId}.json`,
-    );
+    const outPath = debugRunLedgerPath(this.ledger.repoPath, this.ledger.runId);
     fs.writeFileSync(outPath, JSON.stringify(this.ledger, null, 2));
   }
 

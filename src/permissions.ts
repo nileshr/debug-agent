@@ -7,16 +7,17 @@ export type PermissionDecision =
 
 export interface PermissionPolicyOptions {
   repoPath: string;
-  /** Auto-allow chrome-devtools MCP tool calls */
-  allowChromeDevTools?: boolean;
+  /** Auto-allow browser MCP tool calls (chrome-devtools and/or playwright) */
+  allowBrowserMcp?: boolean;
 }
 
 const CHROME_TOOL_PREFIXES = [
   "chrome-devtools",
   "chrome_devtools",
   "mcp_chrome",
-  "browser_",
 ];
+
+const PLAYWRIGHT_TOOL_PREFIXES = ["playwright", "mcp_playwright"];
 
 function isUnderRepo(filePath: string, repoPath: string): boolean {
   const resolved = path.resolve(filePath);
@@ -24,10 +25,14 @@ function isUnderRepo(filePath: string, repoPath: string): boolean {
   return resolved === repo || resolved.startsWith(repo + path.sep);
 }
 
-function toolLooksLikeChromeDevTools(toolName: string | undefined): boolean {
+function toolLooksLikeBrowserMcp(toolName: string | undefined): boolean {
   if (!toolName) return false;
   const lower = toolName.toLowerCase();
-  return CHROME_TOOL_PREFIXES.some((p) => lower.includes(p));
+  return (
+    CHROME_TOOL_PREFIXES.some((p) => lower.includes(p)) ||
+    PLAYWRIGHT_TOOL_PREFIXES.some((p) => lower.includes(p)) ||
+    lower.includes("browser_")
+  );
 }
 
 /**
@@ -38,10 +43,10 @@ export function decidePermission(
   params: RequestPermissionParams,
   options: PermissionPolicyOptions,
 ): PermissionDecision {
-  const { allowChromeDevTools = true } = options;
+  const { allowBrowserMcp = true } = options;
   const toolName = params.toolName ?? "";
 
-  if (allowChromeDevTools && toolLooksLikeChromeDevTools(toolName)) {
+  if (allowBrowserMcp && toolLooksLikeBrowserMcp(toolName)) {
     return { outcome: "selected", optionId: "allow-always" };
   }
 

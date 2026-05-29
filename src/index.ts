@@ -5,9 +5,34 @@ export * from "./debug/types.js";
 export { emitHtmlReport, REPORTS_DIR, reportFilePath } from "./report/emit.js";
 export {
   ensureChromeDevToolsMcpConfig,
+  ensureBrowserMcpConfig,
   acpMcpServersParam,
   CHROME_DEVTOOLS_MCP_ENTRY,
-} from "./mcp/chrome.js";
+  PLAYWRIGHT_MCP_ENTRY,
+  browserMcpLabel,
+} from "./mcp/browser.js";
+export {
+  resolveAgentConfig,
+  modelForPhase,
+  needsInteractiveConfig,
+} from "./config/resolve.js";
+export { DEFAULT_AGENT_CONFIG } from "./config/defaults.js";
+export { GLOBAL_CONFIG_PATH } from "./config/paths.js";
+export {
+  REPO_DEBUG_AGENT_DIR,
+  repoDebugAgentDir,
+  repoConfigPath,
+  debugLogPath,
+  debugRunsDir,
+  debugRunLedgerPath,
+} from "./debug/repo-paths.js";
+export {
+  loadGlobalConfig,
+  loadRepoConfig,
+  saveGlobalConfig,
+  saveRepoConfig,
+} from "./config/store.js";
+export type { AgentConfig, BrowserMcp, ResolvedAgentConfig } from "./config/types.js";
 export { runSetup, exitCodeForReport } from "./setup/run-setup.js";
 export { runAllChecks } from "./setup/checks.js";
 export { runUpgrade, exitCodeForUpgrade, detectInstallKind } from "./setup/upgrade.js";

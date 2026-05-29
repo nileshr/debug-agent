@@ -2,7 +2,7 @@
 
 ACP debugger that **emulates** Cursor IDE Debug Mode: hypothesize → instrument → reproduce in Chrome → fix → verify → review → HTML report.
 
-Native Debug Mode is not available over ACP (`agent`, `plan`, `ask` only). This CLI reproduces that workflow via `agent acp`, `chrome-devtools-mcp`, and `.cursor/debug.log`.
+Native Debug Mode is not available over ACP (`agent`, `plan`, `ask` only). This CLI reproduces that workflow via `agent acp`, browser MCP, and `<repo>/.debug-agent/debug.log`.
 
 ## Quick start
 
@@ -32,7 +32,9 @@ The `debug-agent` bin is an alias for the same CLI.
 - Node 20+
 - Chrome (for `chrome-devtools-mcp`)
 
-Adds `chrome-devtools` to `<repo>/.cursor/mcp.json` on first run if missing.
+Agent prefs live in `~/.debug-agent/config.json` (optional repo override: `<repo>/.debug-agent/config.json`). First TTY run opens an interactive model picker if no config exists.
+
+Adds the selected browser MCP (`chrome-devtools` or `playwright`) to `<repo>/.cursor/mcp.json` on first browser verify run if missing.
 
 ## Commands
 
@@ -57,7 +59,11 @@ Adds `chrome-devtools` to `<repo>/.cursor/mcp.json` on first run if missing.
 | `--no-open` | Print `file://` link only |
 | `--no-report` | Skip HTML report |
 | `--max-cycles 5` | Cap verify/fix retries |
-| `--model "composer-2.5[fast=true]"` | ACP model |
+| `--model <id>` | Fixer model (overrides config) |
+| `--planner-model <id>` | Planner model (hypothesize) |
+| `--reviewer-model <id>` | Reviewer model (review phase) |
+| `--browser-mcp chrome-devtools\|playwright` | Browser MCP for `--url` / Vite verify |
+| `debug config` | Show or edit saved agent prefs |
 
 ## Smoke tests
 
