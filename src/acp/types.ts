@@ -81,6 +81,8 @@ export const SessionNewResultSchema = z.object({
   configOptions: z.array(z.unknown()).optional(),
 });
 
+export const SessionLoadResultSchema = SessionNewResultSchema.omit({ sessionId: true });
+
 export const SessionPromptResultSchema = z.object({
   stopReason: z.string().optional(),
 });
@@ -179,6 +181,7 @@ export const CursorTaskParamsSchema = z.object({
 export type SessionMode = z.infer<typeof SessionModeSchema>;
 export type InitializeResult = z.infer<typeof InitializeResultSchema>;
 export type SessionNewResult = z.infer<typeof SessionNewResultSchema>;
+export type SessionLoadResult = z.infer<typeof SessionLoadResultSchema>;
 export type SessionPromptResult = z.infer<typeof SessionPromptResultSchema>;
 export type SessionUpdateParams = z.infer<typeof SessionUpdateParamsSchema>;
 export type RequestPermissionParams = z.infer<typeof RequestPermissionParamsSchema>;

@@ -47,6 +47,51 @@ const mockReport = {
     risks: [],
     followUps: ["Add e2e test for save flow"],
   },
+  session: {
+    sessionId: "test-session",
+    resumed: false,
+    debugResumeCommand:
+      'debug run "/tmp/demo-repo" --session test-session --bug "Save button shows blank modal" --url "http://localhost:3000"',
+    agentResumeCommand: "agent --resume test-session",
+  },
+  trace: [
+    {
+      ts: Date.now() - 40_000,
+      phase: "hypothesize",
+      kind: "phase",
+      text: "Started hypothesize",
+    },
+    {
+      ts: Date.now() - 38_000,
+      phase: "hypothesize",
+      kind: "message",
+      text: "Investigating Modal.tsx open handler and save flow state",
+    },
+    {
+      ts: Date.now() - 35_000,
+      phase: "hypothesize",
+      kind: "todo",
+      text: "Rank hypotheses for blank modal on save",
+    },
+    {
+      ts: Date.now() - 20_000,
+      phase: "instrument",
+      kind: "tool",
+      text: "StrReplace",
+    },
+    {
+      ts: Date.now() - 18_000,
+      phase: "instrument",
+      kind: "message",
+      text: "Adding JSONL instrumentation around setOpen and isReady",
+    },
+    {
+      ts: Date.now() - 5_000,
+      phase: "apply_fix",
+      kind: "message",
+      text: "Gate modal open on isReady flag after save response",
+    },
+  ],
 };
 
 const path = await emitHtmlReport(mockReport, { open: false });

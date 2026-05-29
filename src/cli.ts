@@ -95,6 +95,10 @@ program
   .option("--max-cycles <n>", "Max verify/fix cycles", "5")
   .option("--no-report", "Skip HTML report generation")
   .option("--no-open", "Print file:// link only; do not open browser")
+  .option(
+    "--session <id>",
+    "Resume an existing ACP agent session (session/load) instead of creating a new one",
+  )
   .action(async (repoArg: string | undefined, descriptionParts: string[], opts) => {
     let repo = ".";
     let bug = opts.bug?.trim() ?? "";
@@ -149,6 +153,7 @@ async function runDebugAgent(
     maxCycles?: string;
     report?: boolean;
     noOpen?: boolean;
+    session?: string;
   },
 ): Promise<void> {
   const maxCycles = parseInt(opts.maxCycles ?? "5", 10);
@@ -181,12 +186,34 @@ async function runDebugAgent(
       maxCycles,
       writeReport: opts.report !== false,
       openReport,
+      resumeSessionId: opts.session?.trim() || undefined,
       onPhase: () => {},
     });
 
     const result = await controller.run();
 
     console.log(chalk.green(`\nRun ${result.ledger.runId} finished: ${result.ledger.status}`));
+    console.log(
+      chalk.dim(
+        `Session: ${result.ledger.sessionId}${result.ledger.sessionResumed ? " (resumed)" : ""}`,
+      ),
+    );
+    const { formatAgentResumeCommand, formatDebugResumeCommand } = await import(
+      "./debug/session-info.js"
+    );
+    console.log(
+      chalk.dim(
+        `Resume: ${formatDebugResumeCommand({
+          sessionId: result.ledger.sessionId,
+          repoPath,
+          bugDescription: opts.bug,
+          url: opts.verifyTarget.url,
+        })}`,
+      ),
+    );
+    console.log(
+      chalk.dim(`Agent:  ${formatAgentResumeCommand(result.ledger.sessionId)}`),
+    );
     if (result.reportPath) {
       console.log(chalk.cyan(`Report: ${result.reportPath}`));
     }

@@ -23,6 +23,29 @@ export const RunSummarySchema = z.object({
   followUps: z.array(z.string()).optional(),
 });
 
+export const TraceKindSchema = z.enum([
+  "message",
+  "tool",
+  "todo",
+  "task",
+  "plan",
+  "phase",
+]);
+
+export const TraceEntrySchema = z.object({
+  ts: z.number(),
+  phase: z.string(),
+  kind: TraceKindSchema,
+  text: z.string(),
+});
+
+export const SessionInfoSchema = z.object({
+  sessionId: z.string(),
+  resumed: z.boolean(),
+  debugResumeCommand: z.string(),
+  agentResumeCommand: z.string(),
+});
+
 export const FinalReportSchema = z.object({
   runId: z.string(),
   sessionId: z.string(),
@@ -57,12 +80,17 @@ export const FinalReportSchema = z.object({
     comments: z.array(ReviewCommentSchema),
   }),
   summary: RunSummarySchema,
+  session: SessionInfoSchema,
+  trace: z.array(TraceEntrySchema).optional(),
   transcript: z.array(z.string()).optional(),
 });
 
+export type TraceKind = z.infer<typeof TraceKindSchema>;
+export type TraceEntry = z.infer<typeof TraceEntrySchema>;
 export type Hypothesis = z.infer<typeof HypothesisSchema>;
 export type ReviewComment = z.infer<typeof ReviewCommentSchema>;
 export type RunSummary = z.infer<typeof RunSummarySchema>;
+export type SessionInfo = z.infer<typeof SessionInfoSchema>;
 export type FinalReport = z.infer<typeof FinalReportSchema>;
 
 export type Phase =
@@ -84,6 +112,7 @@ export type VerifyMode = "cli" | "browser";
 export interface RunLedger {
   runId: string;
   sessionId: string;
+  sessionResumed: boolean;
   repoPath: string;
   verifyMode: VerifyMode;
   url?: string;
@@ -101,6 +130,7 @@ export interface RunLedger {
   reproductionSteps: string[];
   logEntries: unknown[];
   reviewComments: ReviewComment[];
+  trace: TraceEntry[];
   transcript: string[];
   streamBuffer: string;
   confirmedHypothesisId?: string;

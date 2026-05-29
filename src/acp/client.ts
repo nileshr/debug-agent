@@ -17,6 +17,7 @@ import {
   type SessionUpdateParams,
   InitializeResultSchema,
   SessionNewResultSchema,
+  SessionLoadResultSchema,
   SessionPromptResultSchema,
 } from "./types.js";
 import {
@@ -25,12 +26,24 @@ import {
   type PermissionPolicyOptions,
 } from "../permissions.js";
 
+export interface StreamUpdate {
+  text: string;
+  sessionUpdate?: string;
+  contentType?: string;
+}
+
+export interface TraceEvent {
+  kind: "message" | "tool" | "todo" | "task" | "plan";
+  text: string;
+}
+
 export interface AcpClientOptions {
   agentCommand?: string;
   agentArgs?: string[];
   requestTimeoutMs?: number;
   permissionPolicy?: PermissionPolicyOptions;
   onStdoutChunk?: (text: string) => void;
+  onTrace?: (event: TraceEvent) => void;
 }
 
 export class AcpClient extends EventEmitter {
@@ -130,14 +143,30 @@ export class AcpClient extends EventEmitter {
     if (method === "session/update") {
       const update = params as SessionUpdateParams;
       const text = update?.update?.content?.text;
+      const sessionUpdate = update?.update?.sessionUpdate;
+      const contentType = update?.update?.content?.type;
       if (text) {
         this.options.onStdoutChunk?.(text);
-        this.emit("stream", text);
+        this.emit("stream", { text, sessionUpdate, contentType } satisfies StreamUpdate);
+
+        const kind =
+          sessionUpdate?.includes("tool") || contentType?.includes("tool")
+            ? "tool"
+            : "message";
+        if (kind === "tool") {
+          this.options.onTrace?.({ kind, text: truncateTrace(text) });
+        }
       }
     }
 
     if (method === "session/request_permission" && requestId != null) {
       const permParams = params as RequestPermissionParams;
+      if (permParams.toolName) {
+        this.options.onTrace?.({
+          kind: "tool",
+          text: permParams.toolName,
+        });
+      }
       const policy = this.options.permissionPolicy;
       const decision = policy
         ? decidePermission(permParams, policy)
@@ -152,10 +181,32 @@ export class AcpClient extends EventEmitter {
     }
 
     if (method === "cursor/create_plan" && requestId != null) {
+      const planParams = params as CursorCreatePlanParams;
+      if (planParams.name || planParams.overview) {
+        this.options.onTrace?.({
+          kind: "plan",
+          text: planParams.name ?? planParams.overview ?? "Creating plan",
+        });
+      }
       this.respond(requestId, { outcome: { outcome: "accepted" } });
     }
 
+    if (method === "cursor/update_todos") {
+      const todoParams = params as CursorUpdateTodosParams;
+      const active = todoParams.todos.find((t) => t.status === "in_progress");
+      const done = todoParams.todos.filter((t) => t.status === "completed").length;
+      const summary = active
+        ? active.content
+        : `${done}/${todoParams.todos.length} todos`;
+      this.options.onTrace?.({ kind: "todo", text: summary });
+    }
+
     if (method === "cursor/task" && requestId != null) {
+      const taskParams = params as CursorTaskParams;
+      this.options.onTrace?.({
+        kind: "task",
+        text: taskParams.description,
+      });
       this.respond(requestId, {
         outcome: { outcome: "completed", durationMs: 0 },
       });
@@ -216,6 +267,19 @@ export class AcpClient extends EventEmitter {
     return SessionNewResultSchema.parse(result);
   }
 
+  async sessionLoad(params: {
+    sessionId: string;
+    cwd: string;
+    mcpServers?: McpServerDef[];
+  }): Promise<SessionNewResult> {
+    const result = await this.send<unknown>("session/load", params);
+    SessionLoadResultSchema.parse(result);
+    return SessionNewResultSchema.parse({
+      sessionId: params.sessionId,
+      ...(result as Record<string, unknown>),
+    });
+  }
+
   async sessionPrompt(params: {
     sessionId: string;
     prompt: Array<{ type: "text"; text: string }>;
@@ -259,4 +323,10 @@ export class AcpClient extends EventEmitter {
   onTask(handler: (params: CursorTaskParams) => void): this {
     return this.on("cursor/task", handler);
   }
+}
+
+function truncateTrace(text: string, max = 120): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, max - 1)}…`;
 }

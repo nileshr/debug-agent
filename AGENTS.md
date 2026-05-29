@@ -25,6 +25,7 @@ TypeScript CLI (`debug` / `debug-agent` bins) that speaks **Cursor ACP** (`agent
 - Inline `mcpServers` array entries fail validation; use project `.cursor/mcp.json`
 - Auth: `authenticate` + `cursor_login` (requires prior `agent login`)
 - Mid-session mode: `session/set_config_option` with `configId: "mode"`
+- Resume: `session/load` with `{ sessionId, cwd, mcpServers }` — CLI flag `--session <id>`
 
 ## Phase loop
 
@@ -49,6 +50,7 @@ debug setup [--repo <path>]
 debug upgrade [--check] [--force]
 debug <repo> --bug "..." --url "http://..."
 debug run <repo> --bug "..." --url "http://..."
+debug run <repo> --session <sessionId> --bug "..."   # resume prior ACP session
 ```
 
 - Setup: `src/setup/checks.ts`, `src/setup/run-setup.ts`
@@ -82,3 +84,22 @@ Reset clears stale `.cursor/debug.log` and `.cursor/debug-runs/` from prior runs
 - Run `npm run build` before claiming green
 - Do not edit user target repos beyond what the debug loop requires
 - Reports and ledgers are diagnostic artifacts; do not commit them from target repos
+
+## Learned User Preferences
+
+- Uses multitask mode and background subagents for parallelizable work
+- When dogfooding debug-agent on itself, omit `--url` — CLI/shell verification is preferred over browser
+- Prefer positional bug prompts (`debug run "save fails"`) and optional flags over requiring `--bug` and `--url`
+- Local dev iteration: bump version, `npm run build`, then `npm link` to refresh the global `debug` bin
+- Todo fixture harness is maintainer-only dev tooling — do not expose fixture orchestration as public CLI subcommands
+- Fixture bugs should have browser-observable symptoms even when maintainer tests define precise acceptance
+
+## Learned Workspace Facts
+
+- This repo has no root `vite.config.*` — `debug run` without `--url` defaults to CLI verify mode (shell), not browser
+- Verify mode: `--url` or `vite.config.*` → browser (chrome-devtools MCP); neither → CLI (shell commands, no Chrome MCP setup)
+- `tsc` emits `dist/cli.js` as non-executable (644); build runs `chmod +x dist/cli.js` — required for `npm link` or zsh reports `permission denied: debug`
+- Distribution is GitHub Releases (`npm pack` tarball + `SHA256SUMS.txt`), not npm registry; `debug upgrade` installs from release assets
+- CLI shorthand `debug <repo> --bug …` is rewritten to `debug run …` before parsing — do not reintroduce duplicate Commander options on root + `run`
+- HTML reports include a structured agent trace timeline; CLI shows a rolling live stream of the last few agent messages per phase
+- Todo fixture oracle and acceptance tests live in `examples/todo-fixture/maintainer/` and are never copied into the disposable workdir

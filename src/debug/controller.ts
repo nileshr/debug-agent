@@ -26,6 +26,14 @@ import {
   RunSummarySchema,
 } from "./types.js";
 import type { CursorUpdateTodosParams } from "../acp/types.js";
+import {
+  AgentTraceCollector,
+  LiveTraceDisplay,
+} from "./trace.js";
+import {
+  formatAgentResumeCommand,
+  formatDebugResumeCommand,
+} from "./session-info.js";
 
 export interface ControllerOptions {
   repoPath: string;
@@ -37,6 +45,7 @@ export interface ControllerOptions {
   maxCycles?: number;
   writeReport?: boolean;
   openReport?: boolean;
+  resumeSessionId?: string;
   onPhase?: (phase: Phase) => void;
 }
 
@@ -56,6 +65,8 @@ export class DebugLoopController {
   private sessionId!: string;
   private spinner: Ora | null = null;
   private logSinceTs = 0;
+  private readonly trace = new AgentTraceCollector();
+  private readonly liveTrace = new LiveTraceDisplay(5);
 
   constructor(options: ControllerOptions) {
     this.options = {
@@ -72,7 +83,14 @@ export class DebugLoopController {
         if (this.ledger) {
           this.ledger.streamBuffer += text;
           this.ledger.transcript.push(text);
+          this.trace.appendStreamChunk(text);
+          this.pushLiveTrace();
         }
+      },
+      onTrace: (event) => {
+        if (!this.ledger) return;
+        this.trace.add(event.kind, event.text);
+        this.pushLiveTrace();
       },
     });
   }
@@ -84,6 +102,7 @@ export class DebugLoopController {
     this.ledger = {
       runId,
       sessionId: "",
+      sessionResumed: Boolean(this.options.resumeSessionId),
       repoPath,
       verifyMode: this.options.verifyMode,
       url: this.options.url,
@@ -101,6 +120,7 @@ export class DebugLoopController {
       reproductionSteps: [],
       logEntries: [],
       reviewComments: [],
+      trace: [],
       transcript: [],
       streamBuffer: "",
       status: "running",
@@ -117,12 +137,29 @@ export class DebugLoopController {
       await this.client.initialize();
       await this.client.authenticate();
 
-      const session = await this.client.sessionNew({
-        cwd: repoPath,
-        mcpServers: acpMcpServersParam(),
-      });
-      this.sessionId = session.sessionId;
-      this.ledger.sessionId = session.sessionId;
+      const mcpServers = acpMcpServersParam();
+      if (this.options.resumeSessionId) {
+        await this.client.sessionLoad({
+          sessionId: this.options.resumeSessionId,
+          cwd: repoPath,
+          mcpServers,
+        });
+        this.sessionId = this.options.resumeSessionId;
+      } else {
+        const session = await this.client.sessionNew({
+          cwd: repoPath,
+          mcpServers,
+        });
+        this.sessionId = session.sessionId;
+      }
+      this.ledger.sessionId = this.sessionId;
+      this.ledger.sessionResumed = Boolean(this.options.resumeSessionId);
+
+      console.log(
+        chalk.dim(
+          `Session: ${this.sessionId}${this.ledger.sessionResumed ? " (resumed)" : " (new)"}`,
+        ),
+      );
 
       await this.client.setModel(this.sessionId, this.options.model);
 
@@ -147,6 +184,7 @@ export class DebugLoopController {
       return { ledger: this.ledger, report, reportPath };
     } finally {
       await this.client.stop();
+      this.liveTrace.endPhase();
       this.spinner?.stop();
     }
   }
@@ -157,6 +195,8 @@ export class DebugLoopController {
     while (phase !== "done") {
       this.ledger.phase = phase;
       this.options.onPhase?.(phase);
+      this.trace.setPhase(phase);
+      this.liveTrace.beginPhase(phase);
       this.spinner = ora(chalk.cyan(`Phase: ${phase}`)).start();
 
       switch (phase) {
@@ -263,7 +303,11 @@ export class DebugLoopController {
           break;
       }
 
+      this.spinner?.stop();
+      this.liveTrace.endPhase();
       this.spinner?.succeed(chalk.green(`Done: ${this.ledger.phase}`));
+      this.trace.flushTextBuffer();
+      this.ledger.trace = this.trace.getEntries();
       this.ledger.streamBuffer = "";
     }
   }
@@ -361,6 +405,17 @@ export class DebugLoopController {
     return data?.verified === true;
   }
 
+  private pushLiveTrace(): void {
+    const recent = this.trace.getRecent(1);
+    const last = recent[recent.length - 1];
+    if (!last || last.kind === "phase") return;
+    this.spinner?.clear();
+    this.liveTrace.push(last);
+    if (this.spinner?.isSpinning) {
+      this.spinner.render();
+    }
+  }
+
   private handleTodos(params: CursorUpdateTodosParams): void {
     this.ledger.todos = params.todos.map((t) => ({
       id: t.id,
@@ -421,6 +476,18 @@ export class DebugLoopController {
       },
       review: { comments: this.ledger.reviewComments },
       summary,
+      session: {
+        sessionId: this.ledger.sessionId,
+        resumed: this.ledger.sessionResumed,
+        debugResumeCommand: formatDebugResumeCommand({
+          sessionId: this.ledger.sessionId,
+          repoPath: this.ledger.repoPath,
+          bugDescription: this.ledger.bugDescription,
+          url: this.ledger.url,
+        }),
+        agentResumeCommand: formatAgentResumeCommand(this.ledger.sessionId),
+      },
+      trace: this.ledger.trace,
       transcript: this.ledger.transcript.slice(-50),
     });
   }
