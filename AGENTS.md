@@ -34,6 +34,7 @@ TypeScript CLI (`debug` / `debug-agent` bins) that speaks **Cursor ACP** (`agent
 - Instrumentation sentinel: `// DEBUG-INSTRUMENT:<runId>`
 - Runtime log: `<repo>/.cursor/debug.log` (JSONL)
 - Run ledger: `<repo>/.cursor/debug-runs/<runId>.json`
+- Run state DB: `~/.debug-agent/state.db` (SQLite: per-phase status + ledger snapshot for crash resume)
 
 ## Commands
 
@@ -50,7 +51,9 @@ debug setup [--repo <path>]
 debug upgrade [--check] [--force]
 debug <repo> --bug "..." --url "http://..."
 debug run <repo> --bug "..." --url "http://..."
-debug run <repo> --session <sessionId> --bug "..."   # resume prior ACP session
+debug run <repo> --session <sessionId> --bug "..."   # resume ACP session only (no phase DB)
+debug resume [repo] [--run <id>]                     # resume interrupted run (phase + ledger + session)
+debug runs [--repo <path>] [--status interrupted]    # list runs from state DB
 ```
 
 - Setup: `src/setup/checks.ts`, `src/setup/run-setup.ts`

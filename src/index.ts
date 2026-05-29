@@ -13,6 +13,13 @@ export { runAllChecks } from "./setup/checks.js";
 export { runUpgrade, exitCodeForUpgrade, detectInstallKind } from "./setup/upgrade.js";
 export type { UpgradeOptions, UpgradeResult, InstallKind } from "./setup/upgrade.js";
 export { resolveVerifyTarget, readPackageScripts } from "./debug/verify-target.js";
+export {
+  getRunStore,
+  closeRunStore,
+  STATE_DB_PATH,
+  type RunListRow,
+  type LoadedRun,
+} from "./debug/run-store.js";
 export type { VerifyTarget } from "./debug/verify-target.js";
 export { getVersion, getPackageRoot, readPackageInfo, getRepositorySlug } from "./version.js";
 export type { CheckResult, SetupReport } from "./setup/types.js";

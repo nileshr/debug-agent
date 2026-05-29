@@ -34,6 +34,7 @@ import {
   formatAgentResumeCommand,
   formatDebugResumeCommand,
 } from "./session-info.js";
+import { getRunStore } from "./run-store.js";
 
 export interface ControllerOptions {
   repoPath: string;
@@ -45,7 +46,10 @@ export interface ControllerOptions {
   maxCycles?: number;
   writeReport?: boolean;
   openReport?: boolean;
+  /** Resume ACP session only (session/load). */
   resumeSessionId?: string;
+  /** Resume loop state from ~/.debug-agent/state.db (phase + ledger). */
+  resumeRunId?: string;
   onPhase?: (phase: Phase) => void;
 }
 
@@ -67,6 +71,7 @@ export class DebugLoopController {
   private logSinceTs = 0;
   private readonly trace = new AgentTraceCollector();
   private readonly liveTrace = new LiveTraceDisplay(5);
+  private interrupted = false;
 
   constructor(options: ControllerOptions) {
     this.options = {
@@ -97,40 +102,99 @@ export class DebugLoopController {
 
   async run(): Promise<ControllerResult> {
     const repoPath = path.resolve(this.options.repoPath);
-    const runId = randomUUID().slice(0, 8);
+    const store = getRunStore();
+    let startPhase: Phase = "hypothesize";
 
-    this.ledger = {
-      runId,
-      sessionId: "",
-      sessionResumed: Boolean(this.options.resumeSessionId),
-      repoPath,
-      verifyMode: this.options.verifyMode,
-      url: this.options.url,
-      bugDescription: this.options.bugDescription,
-      model: this.options.model,
-      reviewer: this.options.reviewer,
-      startedAt: Date.now(),
-      phase: "hypothesize",
-      cycles: 0,
-      hypotheses: [],
-      todos: [],
-      filesTouched: [],
-      sentinelCountBefore: 0,
-      sentinelCountAfter: 0,
-      reproductionSteps: [],
-      logEntries: [],
-      reviewComments: [],
-      trace: [],
-      transcript: [],
-      streamBuffer: "",
-      status: "running",
-    };
+    if (this.options.resumeRunId) {
+      const loaded = store.loadRun(this.options.resumeRunId);
+      if (!loaded) {
+        throw new Error(`Run not found in state DB: ${this.options.resumeRunId}`);
+      }
+      if (path.resolve(loaded.repoPath) !== repoPath) {
+        throw new Error(
+          `Run ${this.options.resumeRunId} belongs to ${loaded.repoPath}, not ${repoPath}`,
+        );
+      }
+      if (loaded.runStatus === "completed") {
+        throw new Error(
+          `Run ${this.options.resumeRunId} already completed (${loaded.ledger.status})`,
+        );
+      }
+      if (loaded.runStatus === "running") {
+        throw new Error(
+          `Run ${this.options.resumeRunId} is still marked running — another debug process may be active`,
+        );
+      }
+      this.ledger = { ...loaded.ledger, status: "running", streamBuffer: "" };
+      startPhase =
+        loaded.nextPhase === "done" ? "summarize" : loaded.nextPhase;
+      this.options.resumeSessionId =
+        this.options.resumeSessionId ?? loaded.sessionId;
+      this.ledger.sessionResumed = true;
+      store.reopenRun(this.ledger.runId, this.ledger);
+      console.log(
+        chalk.dim(
+          `Resuming run ${this.ledger.runId} from phase ${startPhase} (state DB)`,
+        ),
+      );
+    } else {
+      const runId = randomUUID().slice(0, 8);
+      this.ledger = {
+        runId,
+        sessionId: "",
+        sessionResumed: Boolean(this.options.resumeSessionId),
+        repoPath,
+        verifyMode: this.options.verifyMode,
+        url: this.options.url,
+        bugDescription: this.options.bugDescription,
+        model: this.options.model,
+        reviewer: this.options.reviewer,
+        startedAt: Date.now(),
+        phase: "hypothesize",
+        cycles: 0,
+        hypotheses: [],
+        todos: [],
+        filesTouched: [],
+        sentinelCountBefore: 0,
+        sentinelCountAfter: 0,
+        reproductionSteps: [],
+        logEntries: [],
+        reviewComments: [],
+        trace: [],
+        transcript: [],
+        streamBuffer: "",
+        status: "running",
+      };
+      store.createRun(
+        {
+          runId,
+          repoPath,
+          bugDescription: this.options.bugDescription,
+          verifyMode: this.options.verifyMode,
+          url: this.options.url,
+          model: this.options.model,
+          reviewer: this.options.reviewer,
+          maxCycles: this.options.maxCycles,
+        },
+        this.ledger,
+      );
+    }
 
     fs.mkdirSync(path.join(repoPath, ".cursor"), { recursive: true });
     fs.mkdirSync(path.join(repoPath, ".cursor", "debug-runs"), { recursive: true });
     if (this.options.verifyMode === "browser") {
       ensureChromeDevToolsMcpConfig(repoPath);
     }
+
+    const onSignal = (): void => {
+      this.interrupted = true;
+      if (this.ledger?.status === "running") {
+        getRunStore().markInterrupted(this.ledger.runId, this.ledger);
+        this.persistLedger();
+      }
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
 
     try {
       await this.client.start();
@@ -153,22 +217,30 @@ export class DebugLoopController {
         this.sessionId = session.sessionId;
       }
       this.ledger.sessionId = this.sessionId;
-      this.ledger.sessionResumed = Boolean(this.options.resumeSessionId);
+      this.ledger.sessionResumed = Boolean(
+        this.options.resumeSessionId || this.options.resumeRunId,
+      );
+      store.bindSession(this.ledger.runId, this.sessionId, this.ledger);
 
       console.log(
         chalk.dim(
           `Session: ${this.sessionId}${this.ledger.sessionResumed ? " (resumed)" : " (new)"}`,
         ),
       );
+      console.log(chalk.dim(`Run: ${this.ledger.runId}`));
 
       await this.client.setModel(this.sessionId, this.options.model);
 
       this.client.onUpdateTodos((params) => this.handleTodos(params));
 
-      await this.runPhaseLoop();
+      await this.runPhaseLoop(startPhase);
 
-      this.ledger.sentinelCountAfter = countSentinels(repoPath, runId);
+      this.ledger.sentinelCountAfter = countSentinels(
+        repoPath,
+        this.ledger.runId,
+      );
       this.persistLedger();
+      store.markCompleted(this.ledger.runId, this.ledger);
 
       let report: FinalReport | null = null;
       let reportPath: string | null = null;
@@ -182,28 +254,42 @@ export class DebugLoopController {
       }
 
       return { ledger: this.ledger, report, reportPath };
+    } catch (err) {
+      if (this.ledger?.status === "running" && !this.interrupted) {
+        const message = err instanceof Error ? err.message : String(err);
+        store.markFailed(this.ledger.runId, this.ledger, message);
+        store.markInterrupted(this.ledger.runId, this.ledger);
+        this.persistLedger();
+      }
+      throw err;
     } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
       await this.client.stop();
       this.liveTrace.endPhase();
       this.spinner?.stop();
     }
   }
 
-  private async runPhaseLoop(): Promise<void> {
-    let phase: Phase = "hypothesize";
+  private async runPhaseLoop(startPhase: Phase = "hypothesize"): Promise<void> {
+    let phase: Phase = startPhase;
+    const store = getRunStore();
 
     while (phase !== "done") {
       this.ledger.phase = phase;
+      store.recordPhaseStart(this.ledger.runId, phase, this.ledger);
       this.options.onPhase?.(phase);
       this.trace.setPhase(phase);
       this.liveTrace.beginPhase(phase);
       this.spinner = ora(chalk.cyan(`Phase: ${phase}`)).start();
 
+      let nextPhase: Phase = "done";
+
       switch (phase) {
         case "hypothesize":
           await this.client.setMode(this.sessionId, "plan");
           await this.sendPhasePrompt("hypothesize");
-          phase = "instrument";
+          nextPhase = "instrument";
           break;
 
         case "instrument":
@@ -213,7 +299,7 @@ export class DebugLoopController {
             this.ledger.runId,
           );
           await this.sendPhasePrompt("instrument");
-          phase = "reproduce";
+          nextPhase = "reproduce";
           break;
 
         case "reproduce":
@@ -233,17 +319,17 @@ export class DebugLoopController {
               this.logSinceTs - 60_000,
             );
           }
-          phase = "analyze";
+          nextPhase = "analyze";
           break;
 
         case "analyze":
           await this.sendPhasePrompt("analyze");
-          phase = "apply_fix";
+          nextPhase = "apply_fix";
           break;
 
         case "apply_fix":
           await this.sendPhasePrompt("apply_fix");
-          phase = "verify";
+          nextPhase = "verify";
           break;
 
         case "verify": {
@@ -251,13 +337,13 @@ export class DebugLoopController {
           await this.sendPhasePrompt("verify");
           const verified = this.parseVerified(this.ledger.streamBuffer);
           if (verified || this.ledger.cycles >= this.options.maxCycles) {
-            phase = verified ? "mark_fixed" : "analyze";
+            nextPhase = verified ? "mark_fixed" : "analyze";
             if (!verified && this.ledger.cycles >= this.options.maxCycles) {
               this.ledger.status = "partial";
-              phase = "mark_fixed";
+              nextPhase = "mark_fixed";
             }
           } else {
-            phase = "analyze";
+            nextPhase = "analyze";
           }
           break;
         }
@@ -268,12 +354,12 @@ export class DebugLoopController {
             this.ledger.repoPath,
             this.ledger.runId,
           );
-          phase = "review";
+          nextPhase = "review";
           break;
 
         case "review":
           await this.sendPhasePrompt("review");
-          phase =
+          nextPhase =
             this.ledger.reviewComments.length > 0
               ? "apply_review"
               : "re_verify";
@@ -281,16 +367,16 @@ export class DebugLoopController {
 
         case "apply_review":
           await this.sendPhasePrompt("apply_review");
-          phase = "re_verify";
+          nextPhase = "re_verify";
           break;
 
         case "re_verify": {
           await this.sendPhasePrompt("re_verify");
           const ok = this.parseVerified(this.ledger.streamBuffer);
           if (!ok && this.ledger.reviewComments.some((c) => !c.addressed)) {
-            phase = "apply_review";
+            nextPhase = "apply_review";
           } else {
-            phase = "summarize";
+            nextPhase = "summarize";
           }
           break;
         }
@@ -299,9 +385,17 @@ export class DebugLoopController {
           await this.sendPhasePrompt("summarize");
           this.ledger.status =
             this.ledger.status === "partial" ? "partial" : "fixed";
-          phase = "done";
+          nextPhase = "done";
           break;
       }
+
+      store.recordPhaseComplete(
+        this.ledger.runId,
+        phase,
+        nextPhase,
+        this.ledger,
+      );
+      phase = nextPhase;
 
       this.spinner?.stop();
       this.liveTrace.endPhase();
@@ -480,6 +574,7 @@ export class DebugLoopController {
         sessionId: this.ledger.sessionId,
         resumed: this.ledger.sessionResumed,
         debugResumeCommand: formatDebugResumeCommand({
+          runId: this.ledger.runId,
           sessionId: this.ledger.sessionId,
           repoPath: this.ledger.repoPath,
           bugDescription: this.ledger.bugDescription,

@@ -15,6 +15,8 @@ const TOP_LEVEL_COMMANDS = new Set([
   "setup",
   "upgrade",
   "run",
+  "resume",
+  "runs",
   "-h",
   "--help",
   "-v",
@@ -79,6 +81,100 @@ program
       force: opts.force,
     });
     process.exit(exitCodeForUpgrade(result, { check: opts.check }));
+  });
+
+program
+  .command("runs")
+  .description("List debug runs tracked in ~/.debug-agent/state.db")
+  .option("--repo <path>", "Filter by repository path")
+  .option(
+    "--status <status>",
+    "Filter: running | interrupted | completed | failed | all",
+    "all",
+  )
+  .option("--limit <n>", "Max rows", "20")
+  .action(async (opts) => {
+    const { getRunStore } = await import("./debug/run-store.js");
+    const { printRunTable } = await import("./debug/list-runs.js");
+    const limit = parseInt(opts.limit ?? "20", 10);
+    const status = opts.status as
+      | "running"
+      | "interrupted"
+      | "completed"
+      | "failed"
+      | "all";
+    const rows = getRunStore().listRuns({
+      repoPath: opts.repo ? path.resolve(opts.repo) : undefined,
+      runStatus: status,
+      limit: Number.isNaN(limit) ? 20 : limit,
+    });
+    printRunTable(rows);
+  });
+
+program
+  .command("resume [repo]")
+  .description(
+    "Resume an interrupted debug run (phase + ledger from state DB, ACP session/load)",
+  )
+  .option("--run <id>", "Run id (default: latest interrupted run for repo)")
+  .option("--no-report", "Skip HTML report generation")
+  .option("--no-open", "Print file:// link only; do not open browser")
+  .action(async (repoArg: string | undefined, opts) => {
+    const repoPath = path.resolve(repoArg ?? ".");
+    const { getRunStore, STATE_DB_PATH } = await import("./debug/run-store.js");
+    const store = getRunStore();
+    let runId = opts.run?.trim();
+    if (!runId) {
+      runId = store.findLatestInterrupted(repoPath) ?? undefined;
+      if (!runId) {
+        console.error(
+          chalk.red(`No interrupted run for ${repoPath}.`) +
+            chalk.dim(`\nState DB: ${STATE_DB_PATH}\n`) +
+            chalk.dim("List runs: debug runs --repo . --status interrupted\n"),
+        );
+        process.exit(1);
+      }
+      console.log(chalk.dim(`Using latest interrupted run: ${runId}`));
+    }
+
+    const loaded = store.loadRun(runId);
+    if (!loaded) {
+      console.error(chalk.red(`Run not found: ${runId}`));
+      process.exit(1);
+    }
+    if (path.resolve(loaded.repoPath) !== repoPath) {
+      console.error(
+        chalk.red(
+          `Run ${runId} belongs to ${loaded.repoPath}, not ${repoPath}. Pass that repo path.`,
+        ),
+      );
+      process.exit(1);
+    }
+    if (loaded.runStatus === "completed") {
+      console.error(chalk.red(`Run ${runId} already completed.`));
+      process.exit(1);
+    }
+    if (loaded.runStatus === "running") {
+      console.error(
+        chalk.red(
+          `Run ${runId} is still marked running. Stop the other process or pick a different --run.`,
+        ),
+      );
+      process.exit(1);
+    }
+
+    const verifyTarget = resolveVerifyTarget(repoPath, loaded.url);
+    await runDebugAgent(repoPath, {
+      bug: loaded.bugDescription,
+      verifyTarget,
+      model: loaded.model,
+      reviewer: loaded.reviewer,
+      maxCycles: String(loaded.maxCycles),
+      report: opts.report !== false,
+      noOpen: opts.noOpen,
+      session: loaded.sessionId,
+      resumeRunId: runId,
+    });
   });
 
 program
@@ -154,6 +250,7 @@ async function runDebugAgent(
     report?: boolean;
     noOpen?: boolean;
     session?: string;
+    resumeRunId?: string;
   },
 ): Promise<void> {
   const maxCycles = parseInt(opts.maxCycles ?? "5", 10);
@@ -187,6 +284,7 @@ async function runDebugAgent(
       writeReport: opts.report !== false,
       openReport,
       resumeSessionId: opts.session?.trim() || undefined,
+      resumeRunId: opts.resumeRunId,
       onPhase: () => {},
     });
 
@@ -204,6 +302,7 @@ async function runDebugAgent(
     console.log(
       chalk.dim(
         `Resume: ${formatDebugResumeCommand({
+          runId: result.ledger.runId,
           sessionId: result.ledger.sessionId,
           repoPath,
           bugDescription: opts.bug,

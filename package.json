@@ -56,7 +56,7 @@
   },
   "homepage": "https://github.com/nileshr/debug-agent#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.5"
   },
   "dependencies": {
     "chalk": "^5.4.1",
