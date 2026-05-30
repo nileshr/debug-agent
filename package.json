@@ -1,6 +1,6 @@
 {
   "name": "debug-agent",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "debug-agent: ACP-driven debugger with emulated Cursor Debug Mode loop",
   "type": "module",
   "bin": {
