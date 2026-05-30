@@ -1,7 +1,11 @@
-import type { Hypothesis, RunLedger } from "./types.js";
+import type { Hypothesis, Phase, RunLedger } from "./types.js";
 import { browserMcpLabel } from "../mcp/browser.js";
 import { debugLogPath } from "./repo-paths.js";
 import { readPackageScripts } from "./verify-target.js";
+import {
+  renderPromptTemplate,
+  resolvePromptTemplate,
+} from "./prompt-loader.js";
 
 export const SUMMARY_JSON_SCHEMA = `{
   "bugSummary": "string",
@@ -15,6 +19,10 @@ export interface PromptContext {
   ledger: RunLedger;
   logSnippet?: string;
   sinceTs?: number;
+  /** Remaining DEBUG-INSTRUMENT sentinels (mark_fixed phase). */
+  sentinelCountRemaining?: number;
+  /** 0 = first cleanup attempt; >0 = controller retry after incomplete cleanup. */
+  markFixedRetryAttempt?: number;
 }
 
 function hypothesesBlock(hypotheses: Hypothesis[]): string {
@@ -30,7 +38,7 @@ function hypothesesBlock(hypotheses: Hypothesis[]): string {
 
 function verificationBlock(ledger: RunLedger): string {
   if (ledger.verifyMode === "browser") {
-    const mcp = browserMcpLabel(ledger.browserMcp ?? "chrome-devtools");
+    const mcp = browserMcpLabel(ledger.browserMcp ?? "playwright");
     return `Verification: browser (${mcp})\nApp URL: ${ledger.url ?? "(not set)"}`;
   }
   const scripts = readPackageScripts(ledger.repoPath);
@@ -39,62 +47,13 @@ function verificationBlock(ledger: RunLedger): string {
         .map(([name, cmd]) => `  ${name}: ${cmd}`)
         .join("\n")
     : "  (no package.json scripts — infer commands from the repo)";
-  return `Verification: CLI (shell — do NOT use chrome-devtools MCP)
+  return `Verification: CLI (shell — do NOT use browser MCP)
 Use terminal/shell tools to reproduce and verify. Prefer npm/bun scripts from package.json:
 ${scriptLines}`;
 }
 
-export function promptHypothesize(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  return `You are in DEBUG emulation — HYPOTHESIZE phase.
-
-Bug description:
-${ledger.bugDescription}
-
-${verificationBlock(ledger)}
-Repo: ${ledger.repoPath}
-Run ID: ${ledger.runId}
-
-Tasks:
-1. Read the codebase relevant to this bug.
-2. Propose 3-5 ranked hypotheses with specific file/line targets.
-3. Use cursor/update_todos to record each hypothesis as a todo (id H1, H2, ...).
-4. Do NOT edit any files in this phase.
-
-When done, end your reply with a JSON block:
-\`\`\`json
-{"hypotheses":[{"id":"H1","rank":1,"statement":"...","file":"path","line":42}]}
-\`\`\``;
-}
-
-export function promptInstrument(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  return `DEBUG emulation — INSTRUMENT phase.
-
-Run ID: ${ledger.runId}
-Hypotheses:
-${hypothesesBlock(ledger.hypotheses)}
-
-Add minimal JSONL logging to: ${debugLogPath(ledger.repoPath)}
-
-Each log line MUST be one JSON object:
-{"hypothesis":"H#","file":"relative/path","line":N,"value":<any>,"ts":<unix-ms>}
-
-Wrap EVERY instrumentation edit with sentinel comment:
-// DEBUG-INSTRUMENT:${ledger.runId}
-
-Do not change program behavior beyond logging. Track files you touch.
-
-When done, reply with:
-\`\`\`json
-{"filesTouched":["path/to/file.ts"]}
-\`\`\``;
-}
-
-export function promptReproduce(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  if (ledger.verifyMode === "cli") {
-    return `DEBUG emulation — REPRODUCE phase.
+function reproduceBodyCli(ledger: RunLedger): string {
+  return `DEBUG emulation — REPRODUCE phase.
 
 ${verificationBlock(ledger)}
 
@@ -109,8 +68,10 @@ When done, reply with:
 \`\`\`json
 {"steps":["npm run build","node dist/cli.js -V"],"logCaptured":true}
 \`\`\``;
-  }
-  const mcp = browserMcpLabel(ledger.browserMcp ?? "chrome-devtools");
+}
+
+function reproduceBodyBrowser(ledger: RunLedger): string {
+  const mcp = browserMcpLabel(ledger.browserMcp ?? "playwright");
   return `DEBUG emulation — REPRODUCE phase.
 
 Use ${mcp} to reproduce the bug.
@@ -129,50 +90,15 @@ When done, reply with:
 \`\`\``;
 }
 
-export function promptAnalyze(ctx: PromptContext): string {
-  const { ledger, logSnippet, sinceTs } = ctx;
-  return `DEBUG emulation — ANALYZE phase.
-
-Hypotheses:
-${hypothesesBlock(ledger.hypotheses)}
-
-Read ${debugLogPath(ledger.repoPath)} entries since ts=${sinceTs ?? 0}.
-
-Log snippet:
-${logSnippet ?? "(read the file)"}
-
-Identify which hypothesis is CONFIRMED. Propose a precise minimal fix (file, line range, code). Do NOT apply the fix yet.
-
-End with:
-\`\`\`json
-{"confirmedHypothesis":"H1","fixProposal":"description","files":["path"]}
-\`\`\``;
-}
-
-export function promptApplyFix(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  return `DEBUG emulation — APPLY FIX phase.
-
-Confirmed: ${ledger.confirmedHypothesisId ?? "see analysis"}
-Proposal: ${ledger.fixProposed ?? "see prior analysis"}
-
-Apply the minimal fix. Keep instrumentation sentinels (// DEBUG-INSTRUMENT:${ledger.runId}) in place.
-
-Reply when done with:
-\`\`\`json
-{"applied":true,"files":["path"]}
-\`\`\``;
-}
-
-export function promptVerify(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  if (ledger.verifyMode === "cli") {
-    return `DEBUG emulation — VERIFY phase.
+function verifyBodyCli(ledger: RunLedger): string {
+  return `DEBUG emulation — VERIFY phase.
 
 ${verificationBlock(ledger)}
 
 Re-run the same CLI command(s) used to reproduce the bug. The fix should prevent the original failure.
 
+IMPORTANT: Do NOT remove debug instrumentation in this phase. Keep every line containing // DEBUG-INSTRUMENT:${ledger.runId} and keep ${debugLogPath(ledger.repoPath)} logging in place. Cleanup happens in a later mark_fixed phase.
+
 If verification passes:
 \`\`\`json
 {"verified":true}
@@ -182,13 +108,17 @@ If it still fails:
 \`\`\`json
 {"verified":false,"reason":"..."}
 \`\`\``;
-  }
-  const mcp = browserMcpLabel(ledger.browserMcp ?? "chrome-devtools");
+}
+
+function verifyBodyBrowser(ledger: RunLedger): string {
+  const mcp = browserMcpLabel(ledger.browserMcp ?? "playwright");
   return `DEBUG emulation — VERIFY phase.
 
 Reproduce the bug scenario using ${mcp} at ${ledger.url}.
 The fix should prevent the original failure.
 
+IMPORTANT: Do NOT remove debug instrumentation in this phase. Keep every line containing // DEBUG-INSTRUMENT:${ledger.runId} and keep ${debugLogPath(ledger.repoPath)} logging in place. Cleanup happens in a later mark_fixed phase.
+
 If verification passes:
 \`\`\`json
 {"verified":true}
@@ -200,101 +130,106 @@ If it still fails:
 \`\`\``;
 }
 
-export function promptMarkFixed(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  return `DEBUG emulation — MARK FIXED (cleanup instrumentation).
+function buildPromptVars(_phase: Phase, ctx: PromptContext): Record<string, string> {
+  const { ledger, logSnippet, sinceTs } = ctx;
+  const logPath = debugLogPath(ledger.repoPath);
+  const reviewCommentsBlock =
+    ledger.reviewComments
+      .filter((c) => !c.addressed)
+      .map((c) => `- ${c.id}: ${c.text}`)
+      .join("\n") || "(none)";
 
-Bug is verified fixed. Remove ALL lines/edits containing:
-// DEBUG-INSTRUMENT:${ledger.runId}
-
-Delete ${debugLogPath(ledger.repoPath)} if it only contains debug instrumentation data.
-Do not revert the actual bug fix.
-
-Reply with:
-\`\`\`json
-{"cleaned":true}
-\`\`\``;
+  return {
+    bugDescription: ledger.bugDescription,
+    repoPath: ledger.repoPath,
+    runId: ledger.runId,
+    verificationBlock: verificationBlock(ledger),
+    hypothesesBlock: hypothesesBlock(ledger.hypotheses),
+    debugLogPath: logPath,
+    logSnippet: logSnippet ?? "(read the file)",
+    sinceTs: String(sinceTs ?? 0),
+    confirmedHypothesisId: ledger.confirmedHypothesisId ?? "see analysis",
+    fixProposal: ledger.fixProposed ?? "see prior analysis",
+    reviewCommentsBlock,
+    summaryJsonSchema: SUMMARY_JSON_SCHEMA,
+    reproduceBody:
+      ledger.verifyMode === "cli"
+        ? reproduceBodyCli(ledger)
+        : reproduceBodyBrowser(ledger),
+    verifyBody:
+      ledger.verifyMode === "cli"
+        ? verifyBodyCli(ledger)
+        : verifyBodyBrowser(ledger),
+    sentinelCountRemaining: String(ctx.sentinelCountRemaining ?? 0),
+    cleanupRetryNote:
+      (ctx.markFixedRetryAttempt ?? 0) > 0
+        ? `RETRY ${ctx.markFixedRetryAttempt}: Previous cleanup left ${ctx.sentinelCountRemaining ?? "?"} sentinel(s). Search the repo for // DEBUG-INSTRUMENT:${ledger.runId} and remove ALL matches plus debug-only log writes.`
+        : "",
+  };
 }
 
-export function promptReview(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  return `DEBUG emulation — CODE REVIEW phase.
-
-Review the bug fix in repo ${ledger.repoPath} for:
-- correctness
-- minimal diff
-- edge cases
-- missing tests
-
-Return review comments as JSON:
-\`\`\`json
-{"comments":[{"id":"C1","text":"...","addressed":false}]}
-\`\`\`
-
-If no issues: {"comments":[]}`;
-}
-
-export function promptApplyReview(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  const comments = ledger.reviewComments
-    .filter((c) => !c.addressed)
-    .map((c) => `- ${c.id}: ${c.text}`)
-    .join("\n");
-
-  return `DEBUG emulation — APPLY REVIEW FIXES.
-
-Address these review comments with minimal edits:
-${comments || "(none)"}
-
-Mark each addressed. Reply:
-\`\`\`json
-{"addressed":["C1"]}
-\`\`\``;
-}
-
-export function promptSummarize(ctx: PromptContext): string {
-  const { ledger } = ctx;
-  return `DEBUG emulation — FINAL SUMMARY.
-
-Produce a structured report for run ${ledger.runId}.
-
-Hypotheses considered:
-${hypothesesBlock(ledger.hypotheses)}
-
-Return ONLY valid JSON matching:
-${SUMMARY_JSON_SCHEMA}`;
-}
-
-export function getPromptForPhase(
-  phase: string,
-  ctx: PromptContext,
-): string {
+/** Built-in fallback when no template file is found. */
+function fallbackPrompt(phase: Phase, ctx: PromptContext): string {
+  const vars = buildPromptVars(phase, ctx);
   switch (phase) {
     case "hypothesize":
-      return promptHypothesize(ctx);
+      return renderPromptTemplate(
+        `You are in DEBUG emulation — HYPOTHESIZE phase.\n\nBug description:\n{{bugDescription}}\n\n{{verificationBlock}}\nRepo: {{repoPath}}\nRun ID: {{runId}}`,
+        vars,
+      );
     case "instrument":
-      return promptInstrument(ctx);
+      return renderPromptTemplate(
+        `DEBUG emulation — INSTRUMENT phase.\n\nRun ID: {{runId}}\nHypotheses:\n{{hypothesesBlock}}\n\nAdd logging to {{debugLogPath}}`,
+        vars,
+      );
     case "reproduce":
-      return promptReproduce(ctx);
+      return vars.reproduceBody;
     case "analyze":
-      return promptAnalyze(ctx);
+      return renderPromptTemplate(
+        `DEBUG emulation — ANALYZE phase.\n\nHypotheses:\n{{hypothesesBlock}}\n\nLog: {{debugLogPath}}\n{{logSnippet}}`,
+        vars,
+      );
     case "apply_fix":
-      return promptApplyFix(ctx);
+      return renderPromptTemplate(
+        `DEBUG emulation — APPLY FIX.\nConfirmed: {{confirmedHypothesisId}}\nProposal: {{fixProposal}}`,
+        vars,
+      );
     case "verify":
-      return promptVerify(ctx);
-    case "mark_fixed":
-      return promptMarkFixed(ctx);
-    case "review":
-      return promptReview(ctx);
-    case "apply_review":
-      return promptApplyReview(ctx);
     case "re_verify":
-      return promptVerify(ctx);
+      return vars.verifyBody;
+    case "mark_fixed":
+      return renderPromptTemplate(
+        `Remove instrumentation // DEBUG-INSTRUMENT:{{runId}} from repo.`,
+        vars,
+      );
+    case "review":
+      return renderPromptTemplate(
+        `DEBUG emulation — CODE REVIEW for {{repoPath}}.`,
+        vars,
+      );
+    case "apply_review":
+      return renderPromptTemplate(
+        `Address review:\n{{reviewCommentsBlock}}`,
+        vars,
+      );
     case "summarize":
-      return promptSummarize(ctx);
+      return renderPromptTemplate(
+        `FINAL SUMMARY run {{runId}}\n{{hypothesesBlock}}\nSchema: {{summaryJsonSchema}}`,
+        vars,
+      );
     default:
       return `Continue debug run ${ctx.ledger.runId} phase ${phase}.`;
   }
+}
+
+export function getPromptForPhase(phase: string, ctx: PromptContext): string {
+  const p = phase as Phase;
+  const vars = buildPromptVars(p, ctx);
+  const resolved = resolvePromptTemplate(p, ctx.ledger.repoPath);
+  if (resolved) {
+    return renderPromptTemplate(resolved.text, vars).trim();
+  }
+  return fallbackPrompt(p, ctx);
 }
 
 /** Extract JSON from markdown fenced block or raw object in agent text. */

@@ -27,14 +27,16 @@ const MCP_SERVER_KEYS: Record<BrowserMcp, string> = {
   playwright: "playwright",
 };
 
+const ALL_BROWSER_MCP_KEYS = ["chrome-devtools", "playwright"] as const;
+
 /**
  * ACP `session/new` only accepts `mcpServers: []` for inline definitions in practice;
- * project MCP servers must live in `.cursor/mcp.json`. Ensures the selected browser
- * MCP server is registered before the session starts.
+ * project MCP servers must live in `.cursor/mcp.json`. Ensures exactly one browser
+ * MCP server is registered (removes the other to avoid loading both).
  */
 export function ensureBrowserMcpConfig(
   repoPath: string,
-  browserMcp: BrowserMcp = "chrome-devtools",
+  browserMcp: BrowserMcp = "playwright",
 ): void {
   const cursorDir = path.join(repoPath, ".cursor");
   const mcpPath = path.join(cursorDir, "mcp.json");
@@ -54,10 +56,14 @@ export function ensureBrowserMcpConfig(
     }
   }
 
-  if (!config.mcpServers![serverKey]) {
-    config.mcpServers![serverKey] = { ...entry };
-    fs.writeFileSync(mcpPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  for (const key of ALL_BROWSER_MCP_KEYS) {
+    if (key !== serverKey && config.mcpServers![key]) {
+      delete config.mcpServers![key];
+    }
   }
+
+  config.mcpServers![serverKey] = { ...entry };
+  fs.writeFileSync(mcpPath, JSON.stringify(config, null, 2) + "\n", "utf8");
 }
 
 /** @deprecated Use ensureBrowserMcpConfig */
@@ -73,3 +79,7 @@ export function acpMcpServersParam(): [] {
 export function browserMcpLabel(browserMcp: BrowserMcp): string {
   return browserMcp === "playwright" ? "Playwright MCP" : "Chrome DevTools MCP";
 }
+
+/** Shown by `debug setup` / `debug run` when chrome-devtools is the effective browser MCP. */
+export const CHROME_DEVTOOLS_ALLOW_PROMPT_MESSAGE =
+  'Chrome DevTools MCP: when Chrome shows an "Allow" automation prompt, click Allow — browser verification cannot proceed until you accept it.';

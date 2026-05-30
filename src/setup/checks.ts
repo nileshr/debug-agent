@@ -4,7 +4,11 @@ import os from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { AcpClient } from "../acp/client.js";
-import { acpMcpServersParam } from "../mcp/browser.js";
+import {
+  acpMcpServersParam,
+  CHROME_DEVTOOLS_ALLOW_PROMPT_MESSAGE,
+} from "../mcp/browser.js";
+import { resolveAgentConfig } from "../config/resolve.js";
 import { REPORTS_DIR } from "../report/emit.js";
 import {
   isDirectoryAccessible,
@@ -147,20 +151,31 @@ export async function checkAuth(): Promise<CheckResult> {
     );
   }
 
+  const whoami = await runCommand("agent", ["whoami"], 12_000);
+  if (whoami.ok) {
+    const identity = (whoami.stdout || whoami.stderr).trim().split("\n")[0];
+    if (identity) {
+      return pass("auth", "Cursor auth", `agent whoami: ${identity}`);
+    }
+  }
+
   const cursorDir = path.join(os.homedir(), ".cursor");
   if (!fs.existsSync(cursorDir)) {
     return fail(
       "auth",
       "Cursor auth",
-      "No ~/.cursor directory and no CURSOR_API_KEY",
+      "Not logged in (`agent whoami` failed) and no CURSOR_API_KEY",
       "Run `agent login` in your terminal, or export CURSOR_API_KEY from Cursor → Integrations.",
     );
   }
 
+  const detail = (whoami.stderr || whoami.stdout).trim().slice(0, 120);
   return warn(
     "auth",
     "Cursor auth",
-    "Using local Cursor login (no CURSOR_API_KEY in env)",
+    detail
+      ? `~/.cursor present; agent whoami failed: ${detail}`
+      : "Using local Cursor login (agent whoami unavailable)",
     "If ACP auth fails, run `agent login` or set CURSOR_API_KEY.",
   );
 }
@@ -337,6 +352,23 @@ export async function checkReportsDir(): Promise<CheckResult> {
   }
 }
 
+export async function checkChromeDevToolsAllowPrompt(
+  repoPath?: string,
+): Promise<CheckResult | null> {
+  const { browserMcp } = resolveAgentConfig({
+    repoPath: repoPath ?? resolveSpawnCwd(repoPath),
+    warnOnIssues: false,
+  });
+  if (browserMcp !== "chrome-devtools") return null;
+
+  return warn(
+    "chrome-allow",
+    "Chrome DevTools MCP",
+    CHROME_DEVTOOLS_ALLOW_PROMPT_MESSAGE,
+    "Default is Playwright (no Allow prompt): debug config set --browser-mcp playwright",
+  );
+}
+
 export async function checkRepoMcp(repoPath: string): Promise<CheckResult> {
   const resolved = path.resolve(repoPath);
   if (!fs.existsSync(resolved)) {
@@ -413,6 +445,9 @@ export async function runAllChecks(
   checks.push(await checkChromeBrowser());
   checks.push(await checkChromeDevToolsMcp());
   checks.push(await checkReportsDir());
+
+  const chromeAllow = await checkChromeDevToolsAllowPrompt(options.repoPath);
+  if (chromeAllow) checks.push(chromeAllow);
 
   if (!options.skipAcpProbe) {
     checks.push(await checkAcpAuth(options.repoPath));

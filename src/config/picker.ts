@@ -57,8 +57,8 @@ async function pickBrowserMcp(rl: readline.Interface): Promise<BrowserMcp> {
   const trimmed = answer.trim();
   if (!trimmed) return BROWSER_MCP_CHOICES[defaultNum - 1].id;
   const num = parseInt(trimmed, 10);
-  if (num === 2) return "playwright";
-  if (num === 1) return "chrome-devtools";
+  if (num === 1) return "playwright";
+  if (num === 2) return "chrome-devtools";
   if (trimmed === "playwright" || trimmed === "chrome-devtools") {
     return trimmed;
   }

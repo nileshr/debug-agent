@@ -8,6 +8,13 @@ test.describe("todo fixture e2e", () => {
     await expect(page.getByTestId("todo-label")).toHaveText("Browser todo");
   });
 
+  test("rejects empty todo submit in the browser", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("todo-add").click();
+    await expect(page.getByTestId("todo-item")).toHaveCount(0);
+    await expect(page.getByTestId("todo-error")).toBeVisible();
+  });
+
   test("filters completed todos in the browser", async ({ page }) => {
     await page.goto("/");
     await page.getByTestId("todo-input").fill("Active");

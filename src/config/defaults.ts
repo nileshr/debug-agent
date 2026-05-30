@@ -8,7 +8,7 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
     fixer: "composer-2.5[fast=true]",
     reviewer: "gpt-5.4-xhigh",
   },
-  browserMcp: "chrome-devtools",
+  browserMcp: "playwright",
 };
 
 /** Curated models for the interactive picker (ACP may expose more at runtime). */
@@ -27,11 +27,11 @@ export const CURATED_MODEL_CHOICES: ReadonlyArray<{ id: string; label: string }>
 export const BROWSER_MCP_CHOICES: ReadonlyArray<{ id: AgentConfig["browserMcp"]; label: string }> =
   [
     {
-      id: "chrome-devtools",
-      label: "Chrome DevTools MCP (chrome-devtools-mcp)",
+      id: "playwright",
+      label: "Playwright MCP (@playwright/mcp) — default",
     },
     {
-      id: "playwright",
-      label: "Playwright MCP (@playwright/mcp)",
+      id: "chrome-devtools",
+      label: "Chrome DevTools MCP (chrome-devtools-mcp)",
     },
   ];

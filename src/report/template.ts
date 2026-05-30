@@ -15,6 +15,27 @@ function statusClass(status: string): string {
   return "status-abandoned";
 }
 
+function lifecycleClass(status: string): string {
+  if (status === "running") return "lifecycle-running";
+  if (status === "interrupted") return "lifecycle-interrupted";
+  if (status === "failed") return "lifecycle-failed";
+  return "lifecycle-completed";
+}
+
+function hypothesisStatusClass(status: string): string {
+  if (status === "confirmed") return "hyp-confirmed";
+  if (status === "rejected") return "hyp-rejected";
+  if (status === "inconclusive") return "hyp-inconclusive";
+  return "hyp-pending";
+}
+
+function phaseStatusClass(status: string): string {
+  if (status === "completed") return "phase-completed";
+  if (status === "running") return "phase-running";
+  if (status === "skipped") return "phase-skipped";
+  return "phase-pending";
+}
+
 function traceKindClass(kind: TraceKind): string {
   return `trace-${kind}`;
 }
@@ -28,14 +49,33 @@ function formatTraceTime(ts: number, startedAt: string): string {
   return `+${mins}m${secs.toString().padStart(2, "0")}s`;
 }
 
+function formatTs(ms: number): string {
+  return new Date(ms).toISOString().replace("T", " ").slice(0, 19);
+}
+
 export function renderReportHtml(report: FinalReport): string {
   const dataJson = JSON.stringify(report).replace(/</g, "\\u003c");
 
+  const isInProgress =
+    report.runLifecycleStatus === "running" ||
+    report.runLifecycleStatus === "interrupted";
+
+  const confirmed = report.confirmedHypothesisId;
+  const addressedCount = report.review.comments.filter((c) => c.addressed).length;
+  const reviewTotal = report.review.comments.length;
+
   const hypothesesRows = report.hypotheses
-    .map(
-      (h) =>
-        `<tr><td>${esc(h.id)}</td><td>${h.rank}</td><td>${esc(h.statement)}</td><td>${esc(h.file ?? "—")}${h.line != null ? `:${h.line}` : ""}</td><td><span class="pill">${esc(h.status)}</span></td></tr>`,
-    )
+    .map((h) => {
+      const isConfirmed = h.id === confirmed || h.status === "confirmed";
+      const rowClass = isConfirmed ? "hyp-row-confirmed" : "";
+      return `<tr class="${rowClass}">
+        <td>${esc(h.id)}${isConfirmed ? ' <span class="badge badge-confirmed">confirmed</span>' : ""}</td>
+        <td>${h.rank}</td>
+        <td>${esc(h.statement)}</td>
+        <td>${esc(h.file ?? "—")}${h.line != null ? `:${h.line}` : ""}</td>
+        <td><span class="pill ${hypothesisStatusClass(h.status)}">${esc(h.status)}</span></td>
+      </tr>`;
+    })
     .join("");
 
   const reproSteps = report.reproduction.steps
@@ -43,10 +83,16 @@ export function renderReportHtml(report: FinalReport): string {
     .join("");
 
   const reviewRows = report.review.comments
-    .map(
-      (c) =>
-        `<tr><td>${esc(c.id)}</td><td>${esc(c.text)}</td><td>${c.addressed ? "yes" : "no"}</td></tr>`,
-    )
+    .map((c) => {
+      const badge = c.addressed
+        ? '<span class="badge badge-addressed">addressed</span>'
+        : '<span class="badge badge-pending">open</span>';
+      return `<tr class="${c.addressed ? "review-addressed" : "review-open"}">
+        <td>${esc(c.id)}</td>
+        <td>${esc(c.text)}</td>
+        <td>${badge}</td>
+      </tr>`;
+    })
     .join("");
 
   const risks = (report.summary.risks ?? [])
@@ -56,8 +102,18 @@ export function renderReportHtml(report: FinalReport): string {
     .map((f) => `<li>${esc(f)}</li>`)
     .join("");
 
-  const filesTouched = report.instrumentation.filesTouched
-    .map((f) => `<li><code>${esc(f)}</code></li>`)
+  const bugSummaryLead =
+    report.summary.bugSummary?.trim() || report.bugDescription;
+
+  const summaryNarrative = [
+    report.summary.rootCause
+      ? `<p><strong>Root cause</strong></p><p>${esc(report.summary.rootCause)}</p>`
+      : "",
+    report.summary.fixExplanation
+      ? `<p><strong>Fix</strong></p><p>${esc(report.summary.fixExplanation)}</p>`
+      : "",
+  ]
+    .filter(Boolean)
     .join("");
 
   const traceEntries = (report.trace ?? [])
@@ -75,16 +131,30 @@ export function renderReportHtml(report: FinalReport): string {
     )
     .join("");
 
-  const traceByPhase = (report.trace ?? []).reduce<Record<string, number>>(
-    (acc, e) => {
-      if (e.phase) acc[e.phase] = (acc[e.phase] ?? 0) + 1;
-      return acc;
-    },
-    {},
-  );
-  const tracePhaseSummary = Object.entries(traceByPhase)
-    .map(([phase, count]) => `<span class="pill">${esc(phase)} · ${count}</span>`)
-    .join(" ");
+  const phaseTimeline = (report.phaseTimeline ?? [])
+    .map((p) => {
+      const isCurrent = p.phase === report.currentPhase && isInProgress;
+      const timing =
+        p.startedAt != null
+          ? `<span class="phase-time">${esc(formatTs(p.startedAt))}${p.completedAt != null ? ` → ${esc(formatTs(p.completedAt))}` : ""}</span>`
+          : "";
+      return `<div class="phase-step ${phaseStatusClass(p.status)}${isCurrent ? " phase-current" : ""}">
+        <span class="phase-name">${esc(p.phase)}</span>
+        <span class="pill ${phaseStatusClass(p.status)}">${esc(p.status)}</span>
+        ${timing}
+        ${p.error ? `<span class="phase-error">${esc(p.error)}</span>` : ""}
+      </div>`;
+    })
+    .join("");
+
+  const lifecycleBanner =
+    report.runLifecycleStatus && report.runLifecycleStatus !== "completed"
+      ? `<div class="banner ${lifecycleClass(report.runLifecycleStatus)}">
+          Run is <strong>${esc(report.runLifecycleStatus)}</strong>
+          ${report.currentPhase ? ` · current phase: <code>${esc(report.currentPhase)}</code>` : ""}
+          ${isInProgress ? " · report reflects progress so far" : ""}
+        </div>`
+      : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -103,6 +173,9 @@ export function renderReportHtml(report: FinalReport): string {
     --fixed: #166534;
     --partial: #b45309;
     --abandoned: #991b1b;
+    --confirmed: #166534;
+    --rejected: #6b7280;
+    --pending: #92400e;
   }
   * { box-sizing: border-box; }
   body {
@@ -121,10 +194,45 @@ export function renderReportHtml(report: FinalReport): string {
     margin-bottom: 20px;
   }
   h1 { font-size: 1.35rem; margin: 0 0 8px; font-weight: 600; }
-  .meta { font-size: 0.875rem; color: var(--muted); }
+  .session-id {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin: 0 0 12px;
+    word-break: break-all;
+  }
+  .session-id code {
+    font-size: 0.85rem;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .lead-summary {
+    font-size: 1rem;
+    margin: 12px 0 0;
+    line-height: 1.55;
+  }
+  .meta { font-size: 0.875rem; color: var(--muted); margin: 4px 0; }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px 16px;
+    margin-top: 12px;
+    font-size: 0.875rem;
+  }
+  .meta-grid dt { color: var(--muted); font-weight: 500; margin: 0; }
+  .meta-grid dd { margin: 0 0 8px; }
   .status-fixed { color: var(--fixed); font-weight: 600; }
   .status-partial { color: var(--partial); font-weight: 600; }
   .status-abandoned { color: var(--abandoned); font-weight: 600; }
+  .banner {
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    font-size: 0.875rem;
+  }
+  .lifecycle-running { background: #eff6ff; border-color: #93c5fd; }
+  .lifecycle-interrupted { background: #fffbeb; border-color: #fcd34d; }
+  .lifecycle-failed { background: #fef2f2; border-color: #fca5a5; }
+  .lifecycle-completed { background: #f0fdf4; border-color: #86efac; }
   section {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -140,18 +248,56 @@ export function renderReportHtml(report: FinalReport): string {
     font-weight: 600;
   }
   table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--muted); font-weight: 500; }
+  tr.hyp-row-confirmed { background: #f0fdf4; }
+  tr.review-open { background: #fffbeb; }
+  tr.review-addressed { background: #f9fafb; }
   .pill {
     display: inline-block;
     padding: 2px 8px;
     border: 1px solid var(--border);
     font-size: 0.75rem;
+    text-transform: lowercase;
   }
+  .hyp-confirmed { border-color: #86efac; color: var(--confirmed); background: #f0fdf4; }
+  .hyp-rejected { border-color: #d1d5db; color: var(--rejected); }
+  .hyp-pending { border-color: #fcd34d; color: var(--pending); }
+  .hyp-inconclusive { border-color: #c4b5fd; color: #6d28d9; }
+  .badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 1px 6px;
+    margin-left: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .badge-confirmed { background: #dcfce7; color: var(--confirmed); }
+  .badge-addressed { background: #dcfce7; color: var(--confirmed); }
+  .badge-pending { background: #fef3c7; color: var(--pending); }
+  .phase-timeline { display: flex; flex-direction: column; gap: 6px; }
+  .phase-step {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-left: 3px solid var(--border);
+    font-size: 0.85rem;
+  }
+  .phase-step.phase-current { border-left-color: var(--accent); background: #eff6ff; }
+  .phase-step.phase-completed { border-left-color: #86efac; }
+  .phase-step.phase-running { border-left-color: var(--accent); }
+  .phase-step.phase-pending { border-left-color: #e5e7eb; opacity: 0.75; }
+  .phase-name { font-weight: 500; min-width: 7rem; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  .phase-time { font-size: 0.72rem; color: var(--muted); }
+  .phase-error { font-size: 0.72rem; color: var(--abandoned); }
   code { font-size: 0.8rem; background: var(--bg); padding: 1px 4px; }
   ul { margin: 0; padding-left: 1.25rem; }
   .summary-block { white-space: pre-wrap; font-size: 0.9rem; }
   .caption { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+  .section-stats { font-size: 0.8rem; color: var(--muted); margin-bottom: 10px; }
   .trace-list { display: flex; flex-direction: column; gap: 10px; max-height: 520px; overflow: auto; }
   .trace-item {
     border-left: 3px solid var(--border);
@@ -181,7 +327,6 @@ export function renderReportHtml(report: FinalReport): string {
     letter-spacing: 0.04em;
   }
   .trace-text { white-space: pre-wrap; word-break: break-word; }
-  .trace-summary { margin-bottom: 12px; }
   .resume-cmd {
     margin: 4px 0 12px;
     padding: 10px 12px;
@@ -196,62 +341,59 @@ export function renderReportHtml(report: FinalReport): string {
 </head>
 <body>
 <div class="wrap">
+  ${lifecycleBanner}
   <header>
+    <p class="session-id">Session ID: <code>${esc(report.session.sessionId)}</code>${report.session.resumed ? " · resumed session" : ""}</p>
     <h1>Bug fix report — ${esc(report.runId)}</h1>
     <p class="meta">
-      Status: <span class="${statusClass(report.status)}">${esc(report.status)}</span>
+      Outcome: <span class="${statusClass(report.status)}">${esc(report.status)}</span>
       · Model: ${esc(report.model)}
-      · ${(report.elapsedMs / 1000).toFixed(1)}s
-      · ${report.cycles} cycle(s)
+      · ${(report.elapsedMs / 1000).toFixed(1)}s elapsed
     </p>
+    <p class="lead-summary">${esc(bugSummaryLead)}</p>
+    <dl class="meta-grid">
+      <div><dt>Verify cycles</dt><dd>${report.cycles}</dd></div>
+      <div><dt>Review cycles</dt><dd>${report.reviewCycles}</dd></div>
+      <div><dt>Confirmed hypothesis</dt><dd>${confirmed ? `<code>${esc(confirmed)}</code>` : "—"}</dd></div>
+      <div><dt>Review comments</dt><dd>${reviewTotal ? `${addressedCount}/${reviewTotal} addressed` : "none"}</dd></div>
+    </dl>
     <p class="meta">Repo: <code>${esc(report.repoPath)}</code></p>
     <p class="meta">Verify: ${esc(report.verifyMode)}${report.url ? ` · ${esc(report.url)}` : ""}</p>
+    ${
+      report.bugDescription !== bugSummaryLead
+        ? `<p class="meta">Reported bug: ${esc(report.bugDescription)}</p>`
+        : ""
+    }
   </header>
 
-  <section><h2>Agent session</h2>
-    <p class="meta">Session ID: <code>${esc(report.session.sessionId)}</code>${report.session.resumed ? " · resumed" : " · new"}</p>
-    <p class="meta"><strong>debug resume:</strong></p>
-    <pre class="resume-cmd">${esc(report.session.debugResumeCommand)}</pre>
-    <p class="meta"><strong>agent resume:</strong></p>
-    <pre class="resume-cmd">${esc(report.session.agentResumeCommand)}</pre>
-    <p class="caption">Use the debug command to re-run the emulated loop with prior agent context; use agent resume for direct Cursor CLI access.</p>
+  <section><h2>Summary</h2>
+    <p class="lead-summary" style="margin-top:0">${esc(bugSummaryLead)}</p>
+    ${summaryNarrative || `<p class="meta">No structured summary from the agent yet.</p>`}
+    ${
+      report.hypotheses.length
+        ? `<h3 style="font-size:0.85rem;color:var(--muted);margin:16px 0 8px">Hypotheses considered</h3>
+    ${confirmed ? `<p class="section-stats">Confirmed: <code>${esc(confirmed)}</code></p>` : ""}
+    <table><thead><tr><th>ID</th><th>Rank</th><th>Statement</th><th>Location</th><th>Status</th></tr></thead>
+    <tbody>${hypothesesRows}</tbody></table>`
+        : ""
+    }
+    ${risks ? `<h3 style="font-size:0.85rem;color:var(--muted)">Risks</h3><ul>${risks}</ul>` : ""}
+    ${followUps ? `<h3 style="font-size:0.85rem;color:var(--muted)">Follow-ups</h3><ul>${followUps}</ul>` : ""}
   </section>
 
   ${
-    report.summary.bugSummary
-      ? `<section><h2>Bug summary</h2><p>${esc(report.summary.bugSummary)}</p></section>`
-      : ""
-  }
-
-  ${
-    report.hypotheses.length
-      ? `<section><h2>Hypotheses</h2>
-    <table><thead><tr><th>ID</th><th>Rank</th><th>Statement</th><th>Location</th><th>Status</th></tr></thead>
-    <tbody>${hypothesesRows}</tbody></table>
-    <p class="caption">Hypothesis ledger from debug run</p></section>`
-      : ""
-  }
-
-  ${
-    report.instrumentation.filesTouched.length ||
-    report.instrumentation.sentinelCountBefore > 0
-      ? `<section><h2>Instrumentation</h2>
-    <p>Sentinels before cleanup: ${report.instrumentation.sentinelCountBefore} · after: ${report.instrumentation.sentinelCountAfter}</p>
-    ${filesTouched ? `<ul>${filesTouched}</ul>` : ""}</section>`
-      : ""
-  }
-
-  ${
     report.reproduction.steps.length
-      ? `<section><h2>Reproduction</h2><p>${report.reproduction.mode === "browser" && report.reproduction.url ? esc(report.reproduction.url) : "CLI / shell"}</p><ol>${reproSteps}</ol></section>`
+      ? `<section><h2>Reproduction</h2>
+    <p class="meta">${report.reproduction.mode === "browser" && report.reproduction.url ? esc(report.reproduction.url) : "CLI / shell verification"}</p>
+    <ol>${reproSteps}</ol></section>`
       : ""
   }
 
   ${
-    report.fix.rootCause
-      ? `<section><h2>Fix</h2>
-    <p><strong>Root cause:</strong> ${esc(report.fix.rootCause)}</p>
-    <p>${esc(report.fix.explanation)}</p>
+    report.fix.rootCause || report.fix.explanation
+      ? `<section><h2>Detailed fix</h2>
+    ${report.fix.rootCause ? `<p><strong>Root cause</strong></p><p>${esc(report.fix.rootCause)}</p>` : ""}
+    ${report.fix.explanation ? `<p><strong>What changed</strong></p><p>${esc(report.fix.explanation)}</p>` : ""}
     ${report.fix.diffStat ? `<p class="meta">${esc(report.fix.diffStat)}</p>` : ""}</section>`
       : ""
   }
@@ -259,40 +401,40 @@ export function renderReportHtml(report: FinalReport): string {
   ${
     report.review.comments.length
       ? `<section><h2>Review</h2>
-    <table><thead><tr><th>ID</th><th>Comment</th><th>Addressed</th></tr></thead>
+    <p class="section-stats">${addressedCount} of ${reviewTotal} comment(s) addressed · ${report.reviewCycles} review cycle(s)</p>
+    <table><thead><tr><th>ID</th><th>Comment</th><th>Status</th></tr></thead>
     <tbody>${reviewRows}</tbody></table></section>`
+      : `<section><h2>Review</h2><p class="meta">No review comments.</p></section>`
+  }
+
+  ${
+    phaseTimeline
+      ? `<section><h2>Phase timeline</h2>
+    <div class="phase-timeline">${phaseTimeline}</div>
+    <p class="caption">Phase status from run state DB${isInProgress ? " (run in progress)" : ""}</p></section>`
       : ""
   }
+
+  <section><h2>Agent session</h2>
+    <p class="session-id" style="margin-bottom:12px">Session ID: <code>${esc(report.session.sessionId)}</code></p>
+    <p class="meta"><strong>debug resume</strong></p>
+    <pre class="resume-cmd">${esc(report.session.debugResumeCommand)}</pre>
+    <p class="meta"><strong>debug report</strong></p>
+    <pre class="resume-cmd">debug report ${JSON.stringify(report.repoPath)} --run ${esc(report.runId)}</pre>
+    <p class="meta"><strong>agent resume</strong></p>
+    <pre class="resume-cmd">${esc(report.session.agentResumeCommand)}</pre>
+    <p class="caption">Use debug resume to continue an interrupted run; debug report regenerates this HTML at any time.</p>
+  </section>
 
   ${
     traceEntries
       ? `<section><h2>Agent trace</h2>
-    ${tracePhaseSummary ? `<div class="trace-summary">${tracePhaseSummary}</div>` : ""}
     <div class="trace-list">${traceEntries}</div>
     <p class="caption">Structured timeline of agent messages, tools, todos, and subagent tasks during the run.</p></section>`
       : ""
   }
-
-  <section><h2>Summary</h2>
-    <div class="summary-block" id="summary-json"></div>
-    ${risks ? `<h3 style="font-size:0.85rem;color:var(--muted)">Risks</h3><ul>${risks}</ul>` : ""}
-    ${followUps ? `<h3 style="font-size:0.85rem;color:var(--muted)">Follow-ups</h3><ul>${followUps}</ul>` : ""}
-  </section>
 </div>
-<script>
-window.__RUN__ = ${dataJson};
-(function () {
-  var r = window.__RUN__;
-  var el = document.getElementById("summary-json");
-  if (el && r.summary) {
-    el.textContent = [
-      "Root cause: " + r.summary.rootCause,
-      "",
-      "Fix: " + r.summary.fixExplanation
-    ].join("\\n");
-  }
-})();
-</script>
+<script>window.__RUN__ = ${dataJson};</script>
 </body>
 </html>`;
 }

@@ -1,7 +1,12 @@
+import chalk from "chalk";
 import type { Phase } from "../debug/types.js";
 import { DEFAULT_AGENT_CONFIG } from "./defaults.js";
 import { hasAnyAgentConfig } from "./paths.js";
-import { loadGlobalConfig, loadRepoConfig, mergeConfigs } from "./store.js";
+import {
+  loadGlobalConfigWithIssue,
+  loadRepoConfigWithIssue,
+  mergeConfigs,
+} from "./store.js";
 import type {
   AgentConfig,
   AgentConfigOverrides,
@@ -12,6 +17,8 @@ import type {
 export interface ResolveAgentConfigOptions {
   repoPath: string;
   overrides?: AgentConfigOverrides;
+  /** When false, skip printing warnings for invalid config files (caller handles). */
+  warnOnIssues?: boolean;
 }
 
 function sourceForField(
@@ -43,8 +50,31 @@ function sourceForField(
 export function resolveAgentConfig(
   options: ResolveAgentConfigOptions,
 ): ResolvedAgentConfig {
-  const global = loadGlobalConfig();
-  const repo = loadRepoConfig(options.repoPath);
+  const warn = options.warnOnIssues !== false;
+  const globalLoad = loadGlobalConfigWithIssue();
+  const repoLoad = loadRepoConfigWithIssue(options.repoPath);
+
+  if (warn) {
+    if (globalLoad.issue) {
+      console.error(
+        chalk.yellow(
+          `Ignoring invalid global config (${globalLoad.issue.filePath}): ${globalLoad.issue.message}`,
+        ),
+      );
+      console.error(chalk.dim("Using defaults for missing fields. Fix with `debug config init -y` or edit the file.\n"));
+    }
+    if (repoLoad.issue) {
+      console.error(
+        chalk.yellow(
+          `Ignoring invalid repo config (${repoLoad.issue.filePath}): ${repoLoad.issue.message}`,
+        ),
+      );
+      console.error(chalk.dim("Using global/defaults for missing fields.\n"));
+    }
+  }
+
+  const global = globalLoad.config;
+  const repo = repoLoad.config;
   const cli = options.overrides;
 
   let merged = { ...DEFAULT_AGENT_CONFIG, models: { ...DEFAULT_AGENT_CONFIG.models } };

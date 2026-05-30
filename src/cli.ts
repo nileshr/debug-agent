@@ -11,6 +11,9 @@ import { ensureAgentConfig } from "./config/ensure.js";
 import { resolveAgentConfig } from "./config/resolve.js";
 import { formatResolvedConfig } from "./config/show.js";
 import type { AgentConfigOverrides } from "./config/types.js";
+import { CHROME_DEVTOOLS_ALLOW_PROMPT_MESSAGE } from "./mcp/browser.js";
+import { RunLogWriter, LOGS_DIR } from "./logging/run-log.js";
+import { errorFromUnknown, printUserError } from "./util/errors.js";
 
 const program = new Command();
 
@@ -22,6 +25,7 @@ const TOP_LEVEL_COMMANDS = new Set([
   "run",
   "resume",
   "runs",
+  "report",
   "-h",
   "--help",
   "-v",
@@ -129,6 +133,62 @@ program
   });
 
 program
+  .command("report [repo]")
+  .description(
+    "Generate HTML report for a debug run (works mid-run from state DB + ledger file)",
+  )
+  .option("--run <id>", "Run id (default: latest running/interrupted, else latest for repo)")
+  .option("--no-open", "Print file:// link only; do not open browser")
+  .action(async (repoArg: string | undefined, opts) => {
+    const repoPath = path.resolve(repoArg ?? ".");
+    const { STATE_DB_PATH } = await import("./debug/run-store.js");
+    const { resolveReportRunId, loadRunForReport } = await import(
+      "./debug/load-run-ledger.js"
+    );
+    const { buildFinalReportFromLedger } = await import("./report/build-report.js");
+    const { emitHtmlReport } = await import("./report/emit.js");
+
+    let runId: string;
+    try {
+      runId = resolveReportRunId(repoPath, opts.run?.trim());
+    } catch (err) {
+      console.error(
+        chalk.red((err as Error).message) +
+          chalk.dim(`\nState DB: ${STATE_DB_PATH}\n`) +
+          chalk.dim("List runs: debug runs --repo .\n"),
+      );
+      process.exit(1);
+    }
+
+    if (!opts.run?.trim()) {
+      console.log(chalk.dim(`Using run: ${runId}`));
+    }
+
+    let resolved;
+    try {
+      resolved = loadRunForReport(repoPath, runId);
+    } catch (err) {
+      console.error(chalk.red((err as Error).message));
+      process.exit(1);
+    }
+
+    const report = buildFinalReportFromLedger(resolved.ledger, {
+      endedAt: resolved.endedAt,
+      runLifecycleStatus: resolved.runLifecycleStatus,
+      currentPhase: resolved.currentPhase,
+      phaseTimeline: resolved.phaseTimeline,
+    });
+
+    const outPath = await emitHtmlReport(report, { open: !opts.noOpen });
+    console.log(
+      chalk.dim(
+        `Run status: ${resolved.runLifecycleStatus} · phase: ${resolved.currentPhase}`,
+      ),
+    );
+    console.log(chalk.cyan(`Report: ${outPath}`));
+  });
+
+program
   .command("resume [repo]")
   .description(
     "Resume an interrupted debug run (phase + ledger from state DB, ACP session/load)",
@@ -213,6 +273,10 @@ program
   .option("--reviewer-model <id>", "Reviewer model for review phase")
   .option("--browser-mcp <kind>", "chrome-devtools | playwright (browser verify)")
   .option("--no-config-prompt", "Skip first-run interactive config picker")
+  .option(
+    "--confirm-plan",
+    "After hypothesize, show the plan and wait for confirmation before fixing",
+  )
   .option("--max-cycles <n>", "Max verify/fix cycles", "5")
   .option("--no-report", "Skip HTML report generation")
   .option("--no-open", "Print file:// link only; do not open browser")
@@ -278,6 +342,7 @@ async function runDebugAgent(
     report?: boolean;
     noOpen?: boolean;
     noConfigPrompt?: boolean;
+    confirmPlan?: boolean;
     session?: string;
     resumeRunId?: string;
   },
@@ -314,9 +379,20 @@ async function runDebugAgent(
     console.log(chalk.dim("Verify: CLI (shell commands, no browser)"));
   }
   console.log(formatResolvedConfig(agentConfig, repoPath));
+  if (
+    opts.verifyTarget.mode === "browser" &&
+    agentConfig.browserMcp === "chrome-devtools"
+  ) {
+    console.log(chalk.yellow(`\n⚠ ${CHROME_DEVTOOLS_ALLOW_PROMPT_MESSAGE}\n`));
+  }
   console.log(
     chalk.dim(`Tip: run \`debug setup --repo ${repoPath}\` to verify prerequisites.\n`),
   );
+
+  const runLog = new RunLogWriter();
+  runLog.line(`repo=${repoPath}`);
+  runLog.line(`bug=${opts.bug}`);
+  runLog.line(`verify=${opts.verifyTarget.mode}`);
 
   try {
     const { DebugLoopController } = await import("./debug/controller.js");
@@ -329,14 +405,22 @@ async function runDebugAgent(
       maxCycles,
       writeReport: opts.report !== false,
       openReport,
+      confirmPlan: opts.confirmPlan,
       resumeSessionId: opts.session?.trim() || undefined,
       resumeRunId: opts.resumeRunId,
+      runLog,
       onPhase: () => {},
     });
 
     const result = await controller.run();
+    runLog.section("completed");
+    runLog.line(`status=${result.ledger.status} runId=${result.ledger.runId}`);
+    runLog.line(`sessionId=${result.ledger.sessionId}`);
+    runLog.close();
 
     console.log(chalk.green(`\nRun ${result.ledger.runId} finished: ${result.ledger.status}`));
+    console.log(chalk.dim(`Log: ${runLog.filePath}`));
+    console.log(chalk.dim(`Logs dir: ${LOGS_DIR}`));
     console.log(
       chalk.dim(
         `Session: ${result.ledger.sessionId}${result.ledger.sessionResumed ? " (resumed)" : ""}`,
@@ -364,10 +448,18 @@ async function runDebugAgent(
     }
     process.exit(result.ledger.status === "fixed" ? 0 : 2);
   } catch (err) {
-    console.error(chalk.red("Fatal:"), (err as Error).message);
-    if ((err as Error).stack) {
-      console.error(chalk.dim((err as Error).stack));
-    }
+    runLog.section("fatal");
+    runLog.line((err as Error).message);
+    if ((err as Error).stack) runLog.line((err as Error).stack!);
+    runLog.close();
+
+    const facing = errorFromUnknown(err, "Debug run failed");
+    facing.hints = [
+      "Run `debug setup` to verify agent login and prerequisites.",
+      "Run `debug config init -y` if config files are corrupt.",
+      `Share the log file when reporting issues.`,
+    ];
+    printUserError(facing, runLog.filePath);
     process.exit(1);
   }
 }

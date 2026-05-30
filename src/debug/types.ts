@@ -46,6 +46,14 @@ export const SessionInfoSchema = z.object({
   agentResumeCommand: z.string(),
 });
 
+export const PhaseTimelineEntrySchema = z.object({
+  phase: z.string(),
+  status: z.enum(["pending", "running", "completed", "skipped"]),
+  startedAt: z.number().optional(),
+  completedAt: z.number().optional(),
+  error: z.string().optional(),
+});
+
 export const FinalReportSchema = z.object({
   runId: z.string(),
   sessionId: z.string(),
@@ -54,11 +62,19 @@ export const FinalReportSchema = z.object({
   url: z.string().optional(),
   bugDescription: z.string(),
   status: z.enum(["fixed", "partial", "abandoned"]),
+  runLifecycleStatus: z
+    .enum(["running", "interrupted", "completed", "failed"])
+    .optional(),
+  currentPhase: z.string().optional(),
   model: z.string(),
   startedAt: z.string(),
   endedAt: z.string(),
   elapsedMs: z.number(),
+  /** Verify/fix loop count (verify phase). */
   cycles: z.number(),
+  /** Review loop count (re_verify attempts). */
+  reviewCycles: z.number(),
+  confirmedHypothesisId: z.string().optional(),
   hypotheses: z.array(HypothesisSchema),
   instrumentation: z.object({
     filesTouched: z.array(z.string()),
@@ -83,6 +99,7 @@ export const FinalReportSchema = z.object({
   session: SessionInfoSchema,
   trace: z.array(TraceEntrySchema).optional(),
   transcript: z.array(z.string()).optional(),
+  phaseTimeline: z.array(PhaseTimelineEntrySchema).optional(),
 });
 
 export type TraceKind = z.infer<typeof TraceKindSchema>;
@@ -91,6 +108,7 @@ export type Hypothesis = z.infer<typeof HypothesisSchema>;
 export type ReviewComment = z.infer<typeof ReviewCommentSchema>;
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 export type SessionInfo = z.infer<typeof SessionInfoSchema>;
+export type PhaseTimelineEntry = z.infer<typeof PhaseTimelineEntrySchema>;
 export type FinalReport = z.infer<typeof FinalReportSchema>;
 
 export type Phase =
@@ -126,6 +144,8 @@ export interface RunLedger {
   startedAt: number;
   phase: Phase;
   cycles: number;
+  /** Completed re_verify attempts (review loop). */
+  reviewCycles?: number;
   hypotheses: Hypothesis[];
   todos: Array<{ id: string; content: string; status: string }>;
   filesTouched: string[];

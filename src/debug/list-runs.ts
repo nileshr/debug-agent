@@ -46,6 +46,11 @@ export function printRunTable(rows: RunListRow[]): void {
         ),
       );
     }
+    console.log(
+      chalk.dim(
+        `  report: debug report ${JSON.stringify(r.repoPath)} --run ${r.runId}`,
+      ),
+    );
     console.log();
   }
 }

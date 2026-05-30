@@ -10,7 +10,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js",
+    "build": "tsc && cp -R prompt-templates dist/prompt-templates && chmod +x dist/cli.js",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
@@ -35,6 +35,7 @@
   },
   "files": [
     "dist",
+    "prompt-templates",
     "README.md",
     "AGENTS.md",
     "docs"

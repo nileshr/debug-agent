@@ -10,6 +10,8 @@ The CLI commands are **`debug`** and **`debug-agent`** (same binary).
 - Google Chrome (for reproduction)
 - Network for `npx chrome-devtools-mcp@latest` on first run
 
+Browser verification defaults to **Playwright MCP**. If you use **Chrome DevTools MCP** (`debug config set --browser-mcp chrome-devtools`), you must **accept Chrome's "Allow" automation prompt** when it appears, or the agent cannot proceed with browser verification.
+
 Run after install:
 
 ```bash

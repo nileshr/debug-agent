@@ -10,6 +10,14 @@ export const STATE_DB_PATH = path.join(os.homedir(), ".debug-agent", "state.db")
 export type RunLifecycleStatus = "running" | "interrupted" | "completed" | "failed";
 export type PhaseRowStatus = "pending" | "running" | "completed" | "skipped";
 
+export interface PhaseTimelineRow {
+  phase: string;
+  status: PhaseRowStatus;
+  startedAt?: number;
+  completedAt?: number;
+  error?: string;
+}
+
 export interface CreateRunParams {
   runId: string;
   repoPath: string;
@@ -86,7 +94,7 @@ function parseLedger(json: string): RunLedger {
   return {
     ...raw,
     plannerModel: raw.plannerModel ?? raw.model,
-    browserMcp: raw.browserMcp ?? "chrome-devtools",
+    browserMcp: raw.browserMcp ?? "playwright",
     streamBuffer: "",
     transcript: raw.transcript ?? [],
     trace: raw.trace ?? [],
@@ -338,6 +346,30 @@ export class RunStore {
       )
       .get(path.resolve(repoPath)) as { run_id: string } | undefined;
     return row?.run_id ?? null;
+  }
+
+  getPhaseTimeline(runId: string): PhaseTimelineRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT phase, status, started_at, completed_at, error
+         FROM run_phases WHERE run_id = ?
+         ORDER BY rowid ASC`,
+      )
+      .all(runId) as Array<{
+      phase: string;
+      status: string;
+      started_at: number | null;
+      completed_at: number | null;
+      error: string | null;
+    }>;
+
+    return rows.map((r) => ({
+      phase: r.phase,
+      status: r.status as PhaseRowStatus,
+      startedAt: r.started_at ?? undefined,
+      completedAt: r.completed_at ?? undefined,
+      error: r.error ?? undefined,
+    }));
   }
 
   listRuns(options: {

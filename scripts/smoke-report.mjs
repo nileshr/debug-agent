@@ -13,6 +13,8 @@ const mockReport = {
   endedAt: new Date().toISOString(),
   elapsedMs: 45000,
   cycles: 1,
+  reviewCycles: 1,
+  confirmedHypothesisId: "H1",
   hypotheses: [
     {
       id: "H1",

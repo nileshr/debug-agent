@@ -40,7 +40,9 @@ TypeScript CLI (`debug` / `debug-agent` bins) that speaks **Cursor ACP** (`agent
 - Agent config: `~/.debug-agent/config.json` (global); optional `<repo>/.debug-agent/config.json` (overrides global)
 - Cursor MCP stays in `<repo>/.cursor/mcp.json` (ACP requirement)
 - Default models: planner `claude-opus-4-8-thinking-high`, fixer `composer-2.5[fast=true]`, reviewer `gpt-5.4-xhigh`
-- Browser MCP: `chrome-devtools` (default) or `playwright` (`@playwright/mcp`)
+- Browser MCP: `playwright` (default) or `chrome-devtools`; only one is written to `.cursor/mcp.json`
+- Phase prompts: bundled `prompt-templates/`; overrides in `~/.debug-agent/prompts/` or `<repo>/.debug-agent/prompts/`
+- Run logs: `~/.debug-agent/logs/YYYY-MM-DD/<id>-<ts>.log` (share for issue reports)
 
 ## Commands
 
@@ -59,8 +61,11 @@ debug <repo> --bug "..." --url "http://..."
 debug run <repo> --bug "..." --url "http://..."
 debug run <repo> --session <sessionId> --bug "..."   # resume ACP session only (no phase DB)
 debug resume [repo] [--run <id>]                     # resume interrupted run (phase + ledger + session)
+debug report [repo] [--run <id>] [--no-open]         # HTML report from state DB (works mid-run)
 debug runs [--repo <path>] [--status interrupted]    # list runs from state DB
 debug config [show|init|set]                         # agent model + browser MCP prefs
+debug config init -y                                 # non-interactive defaults
+debug run --confirm-plan                             # pause after hypothesize for approval
 ```
 
 First run with no config files opens an interactive picker (TTY); saves `~/.debug-agent/config.json`. Per-phase ACP model switches: hypothesize → planner, review → reviewer, else → fixer.
@@ -109,7 +114,8 @@ Reset clears stale `<repo>/.debug-agent/` from prior runs.
 ## Learned Workspace Facts
 
 - This repo has no root `vite.config.*` — `debug run` without `--url` defaults to CLI verify mode (shell), not browser
-- Verify mode: `--url` or `vite.config.*` → browser (chrome-devtools MCP); neither → CLI (shell commands, no Chrome MCP setup)
+- Verify mode: `--url` or `vite.config.*` → browser (Playwright MCP by default); neither → CLI (shell commands, no browser MCP setup)
+- ACP session: one `session/new` (or `session/load`) per debug run; all phases use `session/prompt` on the same sessionId (mode/model change per phase)
 - `tsc` emits `dist/cli.js` as non-executable (644); build runs `chmod +x dist/cli.js` — required for `npm link` or zsh reports `permission denied: debug`
 - Distribution is GitHub Releases (`npm pack` tarball + `SHA256SUMS.txt`), not npm registry; `debug upgrade` installs from release assets
 - CLI shorthand `debug <repo> --bug …` is rewritten to `debug run …` before parsing — do not reintroduce duplicate Commander options on root + `run`
