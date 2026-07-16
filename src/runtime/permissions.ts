@@ -2,7 +2,7 @@ import path from "node:path";
 import type { RequestPermissionParams } from "../acp/types.js";
 
 export type PermissionDecision =
-  | { outcome: "selected"; optionId: "allow-once" | "allow-always" | "reject-once" }
+  | { outcome: "selected"; optionId: string }
   | { outcome: "cancelled" };
 
 export interface PermissionPolicyOptions {
@@ -35,19 +35,21 @@ function toolLooksLikeBrowserMcp(toolName: string | undefined): boolean {
   );
 }
 
+/** Runtime-agnostic permission verdict; adapters map it to protocol options. */
+export type AbstractPermissionDecision = "allow" | "allow_always" | "reject";
+
 /**
  * Default permission policy: allow read/edit/shell inside repo cwd and
- * chrome-devtools MCP tools; reject everything else.
+ * browser MCP tools; reject everything else.
  */
-export function decidePermission(
+export function decidePermissionAbstract(
   params: RequestPermissionParams,
   options: PermissionPolicyOptions,
-): PermissionDecision {
+): AbstractPermissionDecision {
   const { allowBrowserMcp = true } = options;
-  const toolName = params.toolName ?? "";
 
-  if (allowBrowserMcp && toolLooksLikeBrowserMcp(toolName)) {
-    return { outcome: "selected", optionId: "allow-always" };
+  if (allowBrowserMcp && toolLooksLikeBrowserMcp(params.toolName ?? "")) {
+    return "allow_always";
   }
 
   const targetPath =
@@ -56,21 +58,80 @@ export function decidePermission(
     (params as { cwd?: string }).cwd;
 
   if (targetPath && !isUnderRepo(targetPath, options.repoPath)) {
-    return { outcome: "selected", optionId: "reject-once" };
+    return "reject";
   }
 
-  const optionsList = params.options ?? [];
-  const hasAllowOnce = optionsList.some((o) => o.optionId === "allow-once");
-  const hasAllowAlways = optionsList.some((o) => o.optionId === "allow-always");
+  return "allow";
+}
 
-  if (hasAllowOnce) {
-    return { outcome: "selected", optionId: "allow-once" };
-  }
-  if (hasAllowAlways) {
-    return { outcome: "selected", optionId: "allow-always" };
+const DECISION_KIND: Record<AbstractPermissionDecision, string> = {
+  allow: "allow_once",
+  allow_always: "allow_always",
+  reject: "reject_once",
+};
+
+/** Cursor's literal option ids, used when the agent advertises no options. */
+const DECISION_LEGACY_OPTION: Record<
+  AbstractPermissionDecision,
+  "allow-once" | "allow-always" | "reject-once"
+> = {
+  allow: "allow-once",
+  allow_always: "allow-always",
+  reject: "reject-once",
+};
+
+/**
+ * Map an abstract verdict onto the agent's advertised permission options.
+ * Preference order: matching spec `kind` → fuzzy optionId match → legacy
+ * literal optionId (empty list) → first advertised option.
+ */
+export function selectPermissionOption(
+  optionsList: NonNullable<RequestPermissionParams["options"]>,
+  decision: AbstractPermissionDecision,
+): PermissionDecision {
+  if (optionsList.length === 0) {
+    return { outcome: "selected", optionId: DECISION_LEGACY_OPTION[decision] };
   }
 
-  return { outcome: "selected", optionId: "allow-once" };
+  const byKind = optionsList.find((o) => o.kind === DECISION_KIND[decision]);
+  if (byKind) {
+    return { outcome: "selected", optionId: byKind.optionId };
+  }
+
+  const lower = (s: string) => s.toLowerCase();
+  const fuzzy =
+    decision === "reject"
+      ? optionsList.find((o) => lower(o.optionId).includes("reject"))
+      : (decision === "allow"
+          ? optionsList.find(
+              (o) =>
+                lower(o.optionId).includes("allow") &&
+                lower(o.optionId).includes("once"),
+            )
+          : optionsList.find(
+              (o) =>
+                lower(o.optionId).includes("allow") &&
+                lower(o.optionId).includes("always"),
+            )) ?? optionsList.find((o) => lower(o.optionId).includes("allow"));
+  if (fuzzy) {
+    return { outcome: "selected", optionId: fuzzy.optionId };
+  }
+
+  return { outcome: "selected", optionId: optionsList[0].optionId };
+}
+
+/**
+ * Historical combined entry point (decide + map). Behavior-compatible with the
+ * pre-v2 Cursor-only implementation.
+ */
+export function decidePermission(
+  params: RequestPermissionParams,
+  options: PermissionPolicyOptions,
+): PermissionDecision {
+  return selectPermissionOption(
+    params.options ?? [],
+    decidePermissionAbstract(params, options),
+  );
 }
 
 export function permissionResponse(

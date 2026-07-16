@@ -112,10 +112,21 @@ export const RequestPermissionParamsSchema = z.object({
       z.object({
         optionId: z.string(),
         name: z.string().optional(),
+        /** ACP spec option kind: allow_once | allow_always | reject_once | reject_always */
+        kind: z.string().optional(),
       }),
     )
     .optional(),
 });
+
+/** Standard ACP plan entry (session/update with sessionUpdate: "plan"). */
+export const AcpPlanEntrySchema = z.object({
+  content: z.string(),
+  priority: z.enum(["high", "medium", "low"]).optional(),
+  status: z.enum(["pending", "in_progress", "completed"]).optional(),
+});
+
+export type AcpPlanEntry = z.infer<typeof AcpPlanEntrySchema>;
 
 export const CursorAskQuestionParamsSchema = z.object({
   toolCallId: z.string(),

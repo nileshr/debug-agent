@@ -37,10 +37,22 @@ if (!scenarioPath) {
 const scenario = JSON.parse(fs.readFileSync(scenarioPath, "utf8"));
 const rules = (scenario.rules ?? []).map((r) => ({ ...r, uses: 0 }));
 
+/**
+ * Personalities:
+ *  - "cursor" (default): cursor_login auth, session/set_config_option for
+ *    mode/model, todos via cursor/update_todos, no auth gate.
+ *  - "standard": advertises authMethods [api_key], REJECTS session/new until
+ *    authenticate is called, supports session/set_mode + session/set_model,
+ *    rejects session/set_config_option, sends plan via standard ACP
+ *    session/update {sessionUpdate: "plan"}.
+ */
+const personality = scenario.personality ?? "cursor";
+
 const state = {
   cwd: process.cwd(),
   runId: "",
   sessionId: `mock-${Math.random().toString(36).slice(2, 10)}`,
+  authenticated: false,
 };
 
 function log(method, params) {
@@ -55,6 +67,10 @@ function send(obj) {
 
 function respond(id, result) {
   send({ jsonrpc: "2.0", id, result });
+}
+
+function respondError(id, code, message) {
+  send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
 function notify(method, params) {
@@ -118,11 +134,25 @@ function handlePrompt(id, params) {
   for (const op of rule.files ?? []) applyFileOp(op);
 
   if (rule.todos) {
-    notify("cursor/update_todos", {
-      toolCallId: "mock-todos",
-      todos: rule.todos,
-      merge: false,
-    });
+    if (personality === "standard") {
+      notify("session/update", {
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "plan",
+          entries: rule.todos.map((t) => ({
+            content: t.content,
+            status: t.status === "cancelled" ? "pending" : t.status,
+            priority: "medium",
+          })),
+        },
+      });
+    } else {
+      notify("cursor/update_todos", {
+        toolCallId: "mock-todos",
+        todos: rule.todos,
+        merge: false,
+      });
+    }
   }
 
   for (const chunk of rule.chunks ?? []) {
@@ -150,25 +180,40 @@ rl.on("line", (line) => {
   if (!method) return; // response to one of our own requests
   log(method, params);
 
+  const isStandard = personality === "standard";
+  const modes = isStandard
+    ? {
+        currentModeId: "default",
+        availableModes: [{ id: "default" }, { id: "plan" }, { id: "acceptEdits" }],
+      }
+    : {
+        currentModeId: "agent",
+        availableModes: [{ id: "agent" }, { id: "plan" }, { id: "ask" }],
+      };
+
   switch (method) {
     case "initialize":
       respond(id, {
         protocolVersion: 1,
         agentCapabilities: { loadSession: true },
-        authMethods: [{ id: "cursor_login", name: "Cursor login" }],
+        authMethods: isStandard
+          ? [{ id: "api_key", name: "API key" }]
+          : [{ id: "cursor_login", name: "Cursor login" }],
       });
       break;
     case "authenticate":
+      state.authenticated = true;
       respond(id, {});
       break;
     case "session/new":
+      if (isStandard && !state.authenticated) {
+        respondError(id, -32000, "authentication required");
+        break;
+      }
       state.cwd = params?.cwd ?? state.cwd;
       respond(id, {
         sessionId: state.sessionId,
-        modes: {
-          currentModeId: "agent",
-          availableModes: [{ id: "agent" }, { id: "plan" }, { id: "ask" }],
-        },
+        modes,
         models: {
           currentModelId: "mock-model",
           availableModels: [{ modelId: "mock-model", name: "Mock Model" }],
@@ -176,16 +221,29 @@ rl.on("line", (line) => {
       });
       break;
     case "session/load":
+      if (isStandard && !state.authenticated) {
+        respondError(id, -32000, "authentication required");
+        break;
+      }
       state.cwd = params?.cwd ?? state.cwd;
       state.sessionId = params?.sessionId ?? state.sessionId;
-      respond(id, {
-        modes: {
-          currentModeId: "agent",
-          availableModes: [{ id: "agent" }, { id: "plan" }, { id: "ask" }],
-        },
-      });
+      respond(id, { modes });
       break;
     case "session/set_config_option":
+      if (isStandard) {
+        respondError(id, -32601, "method not supported");
+        break;
+      }
+      respond(id, {});
+      break;
+    case "session/set_mode":
+    case "session/set_model":
+      if (!isStandard) {
+        respondError(id, -32601, "method not supported");
+        break;
+      }
+      respond(id, {});
+      break;
     case "session/cancel":
       respond(id, {});
       break;

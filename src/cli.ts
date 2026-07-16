@@ -272,6 +272,11 @@ program
   .option("--planner-model <id>", "Planner model for hypothesize phase")
   .option("--reviewer-model <id>", "Reviewer model for review phase")
   .option("--browser-mcp <kind>", "chrome-devtools | playwright (browser verify)")
+  .option("--runtime <kind>", "Agent runtime: acp | flue")
+  .option(
+    "--agent <preset>",
+    "ACP agent preset: cursor | claude | codex | gemini | custom",
+  )
   .option("--no-config-prompt", "Skip first-run interactive config picker")
   .option(
     "--confirm-plan",
@@ -337,6 +342,8 @@ async function runDebugAgent(
     plannerModel?: string;
     reviewerModel?: string;
     browserMcp?: string;
+    runtime?: string;
+    agent?: string;
     configOverrides?: AgentConfigOverrides;
     maxCycles?: string;
     report?: boolean;
@@ -350,6 +357,22 @@ async function runDebugAgent(
   const maxCycles = parseInt(opts.maxCycles ?? "5", 10);
   if (Number.isNaN(maxCycles) || maxCycles < 1) {
     console.error(chalk.red("--max-cycles must be a positive integer"));
+    process.exit(1);
+  }
+
+  if (opts.runtime && !["acp", "flue"].includes(opts.runtime)) {
+    console.error(chalk.red(`Unknown --runtime "${opts.runtime}". Use: acp | flue`));
+    process.exit(1);
+  }
+  if (
+    opts.agent &&
+    !["cursor", "claude", "codex", "gemini", "custom"].includes(opts.agent)
+  ) {
+    console.error(
+      chalk.red(
+        `Unknown --agent "${opts.agent}". Use: cursor | claude | codex | gemini | custom`,
+      ),
+    );
     process.exit(1);
   }
 
@@ -368,8 +391,23 @@ async function runDebugAgent(
     browserMcp:
       (opts.browserMcp as AgentConfigOverrides["browserMcp"] | undefined) ??
       opts.configOverrides?.browserMcp,
+    runtime:
+      (opts.runtime as AgentConfigOverrides["runtime"] | undefined) ??
+      opts.configOverrides?.runtime,
+    agentPreset:
+      (opts.agent as AgentConfigOverrides["agentPreset"] | undefined) ??
+      opts.configOverrides?.agentPreset,
   };
   const agentConfig = resolveAgentConfig({ repoPath, overrides });
+
+  if (agentConfig.runtime === "flue") {
+    console.error(
+      chalk.red(
+        "The flue runtime is not available yet in this build. Use --runtime acp.",
+      ),
+    );
+    process.exit(1);
+  }
 
   console.log(chalk.bold("debug-agent (ACP + emulated Debug Mode)"));
   console.log(chalk.dim(`Repo: ${repoPath}`));

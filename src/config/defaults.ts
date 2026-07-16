@@ -2,13 +2,16 @@ import type { AgentConfig } from "./types.js";
 
 /** Default agent preferences when no config file exists (non-interactive). */
 export const DEFAULT_AGENT_CONFIG: AgentConfig = {
-  version: 1,
+  version: 2,
   models: {
     planner: "claude-opus-4-8-thinking-high",
     fixer: "composer-2.5[fast=true]",
     reviewer: "gpt-5.4-xhigh",
   },
   browserMcp: "playwright",
+  runtime: "acp",
+  autonomy: "static",
+  acp: { preset: "cursor" },
 };
 
 /** Curated models for the interactive picker (ACP may expose more at runtime). */

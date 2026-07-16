@@ -2,6 +2,13 @@ export { AcpClient, type AcpClientOptions } from "./acp/client.js";
 export * from "./acp/types.js";
 export * from "./runtime/types.js";
 export { AcpRuntime, type AcpRuntimeOptions } from "./runtime/acp/adapter.js";
+export {
+  ACP_PRESETS,
+  resolveAcpPreset,
+  isAcpPresetId,
+  type AcpAgentPreset,
+  type AcpPresetId,
+} from "./runtime/acp/presets.js";
 export { extractJsonFromText } from "./runtime/json-extract.js";
 export {
   decidePermission,

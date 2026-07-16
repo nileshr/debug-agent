@@ -9,8 +9,9 @@ import type {
   RuntimeEvent,
   RuntimeSession,
 } from "../runtime/types.js";
+import { resolveAcpPreset } from "../runtime/acp/presets.js";
 import type { ResolvedAgentConfig } from "../config/types.js";
-import { acpMcpServersParam, ensureBrowserMcpConfig } from "../mcp/browser.js";
+import { browserMcpServerSpec, ensureBrowserMcpConfig } from "../mcp/browser.js";
 import { countSentinels } from "./log-tail.js";
 import { debugRunsDir, debugRunLedgerPath } from "./repo-paths.js";
 import { LoopEngine } from "../engine/engine.js";
@@ -198,10 +199,22 @@ export class DebugLoopController {
       );
     }
 
+    const acpBlock = this.options.agentConfig.acp;
+    const preset = resolveAcpPreset(acpBlock?.preset ?? "cursor", {
+      command: acpBlock?.command,
+      args: acpBlock?.args,
+    });
+    this.ledger.agentPreset = preset.id;
+
     fs.mkdirSync(debugRunsDir(repoPath), { recursive: true });
-    if (this.options.verifyMode === "browser") {
+    const wantsBrowser = this.options.verifyMode === "browser";
+    if (wantsBrowser && preset.mcpStrategy === "file") {
       ensureBrowserMcpConfig(repoPath, this.options.agentConfig.browserMcp);
     }
+    const inlineMcpServers =
+      wantsBrowser && preset.mcpStrategy === "inline"
+        ? [browserMcpServerSpec(this.options.agentConfig.browserMcp ?? "playwright")]
+        : [];
 
     const onSignal = (): void => {
       this.interrupted = true;
@@ -220,13 +233,18 @@ export class DebugLoopController {
       this.options.runtime ??
       new AcpRuntime({
         repoPath,
-        mcpServers: acpMcpServersParam(),
+        preset,
+        mcpServers: inlineMcpServers,
         permissionPolicy: { repoPath },
         // Fresh sessions start on the fixer model; on resume force a re-send.
         initialModelId: resuming
           ? undefined
           : this.options.agentConfig.models.fixer,
         onEvent: (ev) => this.handleRuntimeEvent(ev),
+        onWarn: (message) => {
+          this.options.runLog?.line(`runtime: ${message}`);
+          console.log(chalk.dim(`(${preset.id}) ${message}`));
+        },
       });
 
     try {

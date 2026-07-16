@@ -135,6 +135,73 @@ test("happy path: full loop against mock ACP agent ends fixed", async () => {
   }
 });
 
+test("standard ACP agent (claude preset): auth negotiation, set_mode, plan updates", async () => {
+  const env = makeE2eEnv();
+  const STANDARD_SCENARIO = path.join(
+    PROJECT_ROOT,
+    "test",
+    "fixtures",
+    "scenario-standard.json",
+  );
+  try {
+    const result = await runCli({
+      env,
+      scenario: STANDARD_SCENARIO,
+      args: [
+        "run",
+        env.repo,
+        "--bug",
+        "pagination returns one extra item",
+        "--agent",
+        "claude",
+        "--no-open",
+        "--no-config-prompt",
+      ],
+    });
+    assert.equal(result.code, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /finished: fixed/);
+
+    const ledger = readLedger(env.repo);
+    assert.equal(ledger.status, "fixed");
+    assert.equal(ledger.agentPreset, "claude");
+
+    const log = readMockLog(env);
+    const methods = log.map((e) => e.method);
+
+    // On-demand auth: session/new attempted, rejected, authenticate with the
+    // advertised method, then session/new again.
+    const firstNew = methods.indexOf("session/new");
+    const authIdx = methods.indexOf("authenticate");
+    assert.ok(firstNew >= 0 && authIdx > firstNew, "authenticate follows failed session/new");
+    assert.equal(
+      (log[authIdx].params as { methodId: string }).methodId,
+      "api_key",
+      "uses the advertised auth method",
+    );
+    assert.equal(methods.lastIndexOf("session/new") > authIdx, true);
+
+    // Official transport: session/set_mode used, Cursor set_config_option never.
+    assert.ok(!methods.includes("session/set_config_option"));
+    const modeIds = log
+      .filter((e) => e.method === "session/set_mode")
+      .map((e) => (e.params as { modeId: string }).modeId);
+    assert.deepEqual(modeIds, ["plan", "default"], "plan for hypothesize, default for execute");
+
+    // Cursor model ids are not offered by this agent → no set_model attempts.
+    assert.ok(!methods.includes("session/set_model"));
+
+    // Todos arrived via the standard ACP plan update.
+    const todos = ledger.todos as Array<{ content: string }>;
+    assert.equal(todos.length, 1);
+    assert.match(todos[0].content, /Off-by-one/);
+
+    // No cursor extension traffic from the mock in standard mode.
+    assert.ok(!methods.some((m) => m.startsWith("cursor/")));
+  } finally {
+    env.cleanup();
+  }
+});
+
 test("retry path: failed verify loops through analyze and apply_fix again", async () => {
   const env = makeE2eEnv();
   try {
