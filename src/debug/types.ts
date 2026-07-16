@@ -54,6 +54,36 @@ export const PhaseTimelineEntrySchema = z.object({
   error: z.string().optional(),
 });
 
+export const StepTimelineEntrySchema = z.object({
+  seq: z.number(),
+  stepId: z.string(),
+  attempt: z.number(),
+  startedAt: z.number().optional(),
+  endedAt: z.number().optional(),
+  dataSource: z.enum(["structured", "json_extraction", "none"]).optional(),
+  ok: z.boolean().optional(),
+  inserted: z.boolean().optional(),
+});
+
+export const DecisionTimelineEntrySchema = z.object({
+  seq: z.number(),
+  ts: z.number(),
+  afterStep: z.string(),
+  decidedBy: z.enum(["static", "heuristic", "llm", "user", "guardrail_override"]),
+  action: z.enum(["advance", "retry", "insert", "skip_to", "ask_user", "abort", "done"]),
+  nextStepId: z.string().optional(),
+  rationale: z.string().optional(),
+  overridden: z
+    .object({
+      action: z.string(),
+      nextStepId: z.string().optional(),
+      reason: z.string(),
+    })
+    .optional(),
+  modelId: z.string().optional(),
+  latencyMs: z.number().optional(),
+});
+
 export const FinalReportSchema = z.object({
   runId: z.string(),
   sessionId: z.string(),
@@ -100,6 +130,8 @@ export const FinalReportSchema = z.object({
   trace: z.array(TraceEntrySchema).optional(),
   transcript: z.array(z.string()).optional(),
   phaseTimeline: z.array(PhaseTimelineEntrySchema).optional(),
+  stepTimeline: z.array(StepTimelineEntrySchema).optional(),
+  decisionTimeline: z.array(DecisionTimelineEntrySchema).optional(),
 });
 
 export type TraceKind = z.infer<typeof TraceKindSchema>;
@@ -126,6 +158,49 @@ export type Phase =
   | "done";
 
 export type VerifyMode = "cli" | "browser";
+
+/** One executed step (dynamic step list; replaces the fixed phase notion). */
+export interface StepExecutionRecord {
+  seq: number;
+  stepId: string;
+  attempt: number;
+  startedAt: number;
+  endedAt?: number;
+  dataSource?: "structured" | "json_extraction" | "none";
+  ok?: boolean;
+  inserted?: boolean;
+}
+
+export type DecisionAction =
+  | "advance"
+  | "retry"
+  | "insert"
+  | "skip_to"
+  | "ask_user"
+  | "abort"
+  | "done";
+
+export type DecisionMaker =
+  | "static"
+  | "heuristic"
+  | "llm"
+  | "user"
+  | "guardrail_override";
+
+/** Auditable record of one loop-control decision. */
+export interface DecisionRecord {
+  seq: number;
+  ts: number;
+  afterStep: string;
+  decidedBy: DecisionMaker;
+  action: DecisionAction;
+  nextStepId?: string;
+  rationale?: string;
+  /** Set when the engine vetoed an orchestrator decision. */
+  overridden?: { action: DecisionAction; nextStepId?: string; reason: string };
+  modelId?: string;
+  latencyMs?: number;
+}
 
 export interface RunLedger {
   runId: string;
@@ -161,4 +236,11 @@ export interface RunLedger {
   fixProposed?: string;
   summary?: RunSummary;
   status: "running" | "fixed" | "partial" | "abandoned";
+  /** v2 additions (absent on ledgers written by older builds). */
+  ledgerVersion?: number;
+  runtime?: "acp" | "flue";
+  agentPreset?: string;
+  autonomy?: "static" | "guided" | "autonomous";
+  stepHistory?: StepExecutionRecord[];
+  decisions?: DecisionRecord[];
 }

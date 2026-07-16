@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { DEBUG_PHASES } from "./phases.js";
-import type { Phase, RunLedger, VerifyMode } from "./types.js";
+import type { DecisionRecord, Phase, RunLedger, VerifyMode } from "./types.js";
 
 export const STATE_DB_PATH = path.join(os.homedir(), ".debug-agent", "state.db");
 
@@ -104,6 +104,13 @@ function parseLedger(json: string): RunLedger {
     filesTouched: raw.filesTouched ?? [],
     reproductionSteps: raw.reproductionSteps ?? [],
     reviewComments: raw.reviewComments ?? [],
+    // v2 upgrade-on-read for ledgers written by older builds.
+    ledgerVersion: raw.ledgerVersion ?? 2,
+    runtime: raw.runtime ?? "acp",
+    agentPreset: raw.agentPreset ?? "cursor",
+    autonomy: raw.autonomy ?? "static",
+    stepHistory: raw.stepHistory ?? [],
+    decisions: raw.decisions ?? [],
   };
 }
 
@@ -151,6 +158,196 @@ export class RunStore {
       CREATE INDEX IF NOT EXISTS idx_runs_repo_status
         ON runs(repo_path, run_status, updated_at DESC);
     `);
+
+    const versionRow = this.db
+      .prepare("PRAGMA user_version")
+      .get() as { user_version: number };
+    if ((versionRow?.user_version ?? 0) < 2) {
+      this.migrateToV2();
+    }
+  }
+
+  /**
+   * v2: dynamic step-list support. Appends-as-executed `run_steps` replaces
+   * the pre-seeded `run_phases` as the source of truth for what actually ran;
+   * `decisions` records every loop-control decision. `run_phases` is kept and
+   * still written for older builds sharing the same state DB.
+   */
+  private migrateToV2(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS run_steps (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        step_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        error TEXT,
+        data_source TEXT,
+        PRIMARY KEY (run_id, seq),
+        FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS decisions (
+        run_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        after_step TEXT NOT NULL,
+        decided_by TEXT NOT NULL,
+        action TEXT NOT NULL,
+        next_step TEXT,
+        rationale TEXT,
+        overridden_json TEXT,
+        ts INTEGER NOT NULL,
+        PRIMARY KEY (run_id, seq),
+        FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+      );
+    `);
+
+    for (const column of [
+      "runtime TEXT NOT NULL DEFAULT 'acp'",
+      "agent_preset TEXT NOT NULL DEFAULT 'cursor'",
+      "autonomy TEXT NOT NULL DEFAULT 'static'",
+      "resume_token TEXT",
+    ]) {
+      try {
+        this.db.exec(`ALTER TABLE runs ADD COLUMN ${column}`);
+      } catch {
+        // Column already exists (partially applied migration).
+      }
+    }
+
+    // Seed run_steps from the executed portion of legacy run_phases rows so
+    // pre-migration runs keep a step history.
+    this.db.exec(`
+      INSERT OR IGNORE INTO run_steps
+        (run_id, seq, step_id, attempt, status, started_at, completed_at, error, data_source)
+      SELECT run_id,
+             ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY rowid),
+             phase, 1, status, started_at, completed_at, error, NULL
+      FROM run_phases
+      WHERE status IN ('completed', 'running');
+    `);
+
+    this.db.exec("PRAGMA user_version = 2");
+  }
+
+  /** Append an executed-step row; returns its sequence number. */
+  beginStep(runId: string, stepId: string, attempt: number): number {
+    const row = this.db
+      .prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM run_steps WHERE run_id = ?`)
+      .get(runId) as { seq: number };
+    this.db
+      .prepare(
+        `INSERT INTO run_steps (run_id, seq, step_id, attempt, status, started_at)
+         VALUES (?, ?, ?, ?, 'running', ?)`,
+      )
+      .run(runId, row.seq, stepId, attempt, Date.now());
+    return row.seq;
+  }
+
+  completeStep(
+    runId: string,
+    seq: number,
+    status: "completed" | "skipped" | "failed",
+    dataSource?: string | null,
+    error?: string,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE run_steps SET status = ?, completed_at = ?, data_source = ?, error = ?
+         WHERE run_id = ? AND seq = ?`,
+      )
+      .run(status, Date.now(), dataSource ?? null, error ?? null, runId, seq);
+  }
+
+  /** Append a loop-control decision; returns its sequence number. */
+  recordDecision(runId: string, decision: DecisionRecord): number {
+    const row = this.db
+      .prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM decisions WHERE run_id = ?`)
+      .get(runId) as { seq: number };
+    this.db
+      .prepare(
+        `INSERT INTO decisions
+           (run_id, seq, after_step, decided_by, action, next_step, rationale, overridden_json, ts)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        runId,
+        row.seq,
+        decision.afterStep,
+        decision.decidedBy,
+        decision.action,
+        decision.nextStepId ?? null,
+        decision.rationale ?? null,
+        decision.overridden ? JSON.stringify(decision.overridden) : null,
+        decision.ts,
+      );
+    return row.seq;
+  }
+
+  getStepTimeline(runId: string): Array<{
+    seq: number;
+    stepId: string;
+    attempt: number;
+    status: string;
+    startedAt?: number;
+    completedAt?: number;
+    dataSource?: string;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT seq, step_id, attempt, status, started_at, completed_at, data_source
+         FROM run_steps WHERE run_id = ? ORDER BY seq ASC`,
+      )
+      .all(runId) as Array<{
+      seq: number;
+      step_id: string;
+      attempt: number;
+      status: string;
+      started_at: number | null;
+      completed_at: number | null;
+      data_source: string | null;
+    }>;
+    return rows.map((r) => ({
+      seq: r.seq,
+      stepId: r.step_id,
+      attempt: r.attempt,
+      status: r.status,
+      startedAt: r.started_at ?? undefined,
+      completedAt: r.completed_at ?? undefined,
+      dataSource: r.data_source ?? undefined,
+    }));
+  }
+
+  getDecisions(runId: string): DecisionRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT seq, after_step, decided_by, action, next_step, rationale, overridden_json, ts
+         FROM decisions WHERE run_id = ? ORDER BY seq ASC`,
+      )
+      .all(runId) as Array<{
+      seq: number;
+      after_step: string;
+      decided_by: string;
+      action: string;
+      next_step: string | null;
+      rationale: string | null;
+      overridden_json: string | null;
+      ts: number;
+    }>;
+    return rows.map((r) => ({
+      seq: r.seq,
+      ts: r.ts,
+      afterStep: r.after_step,
+      decidedBy: r.decided_by as DecisionRecord["decidedBy"],
+      action: r.action as DecisionRecord["action"],
+      nextStepId: r.next_step ?? undefined,
+      rationale: r.rationale ?? undefined,
+      overridden: r.overridden_json
+        ? (JSON.parse(r.overridden_json) as DecisionRecord["overridden"])
+        : undefined,
+    }));
   }
 
   createRun(params: CreateRunParams, ledger: RunLedger): void {

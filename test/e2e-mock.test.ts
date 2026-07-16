@@ -12,6 +12,21 @@ import {
 } from "./helpers.js";
 
 const HAPPY_SCENARIO = path.join(PROJECT_ROOT, "test", "fixtures", "scenario-happy.json");
+const RETRY_SCENARIO = path.join(PROJECT_ROOT, "test", "fixtures", "scenario-retry.json");
+
+function readStepSequence(home: string, runId: string): string[] {
+  const db = new DatabaseSync(path.join(home, ".debug-agent", "state.db"), {
+    readOnly: true,
+  });
+  try {
+    const rows = db
+      .prepare("SELECT step_id FROM run_steps WHERE run_id = ? ORDER BY seq ASC")
+      .all(runId) as Array<{ step_id: string }>;
+    return rows.map((r) => r.step_id);
+  } finally {
+    db.close();
+  }
+}
 
 test("happy path: full loop against mock ACP agent ends fixed", async () => {
   const env = makeE2eEnv();
@@ -96,6 +111,112 @@ test("happy path: full loop against mock ACP agent ends fixed", async () => {
     } finally {
       db.close();
     }
+
+    // Exact executed-step sequence from the v2 run_steps table.
+    assert.deepEqual(readStepSequence(env.home, ledger.runId as string), [
+      "hypothesize",
+      "instrument",
+      "reproduce",
+      "analyze",
+      "apply_fix",
+      "verify",
+      "mark_fixed",
+      "review",
+      "re_verify",
+      "summarize",
+    ]);
+
+    // Every transition was recorded as an auditable static decision.
+    const decisions = ledger.decisions as Array<{ decidedBy: string; action: string }>;
+    assert.ok(decisions.length >= 10, `expected decision log, got ${decisions?.length}`);
+    assert.ok(decisions.every((d) => d.decidedBy === "static"));
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("retry path: failed verify loops through analyze and apply_fix again", async () => {
+  const env = makeE2eEnv();
+  try {
+    const result = await runCli({
+      env,
+      scenario: RETRY_SCENARIO,
+      args: [
+        "run",
+        env.repo,
+        "--bug",
+        "pagination returns one extra item",
+        "--no-open",
+        "--no-config-prompt",
+      ],
+    });
+    assert.equal(result.code, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+
+    const ledger = readLedger(env.repo);
+    assert.equal(ledger.status, "fixed");
+    assert.equal(ledger.cycles, 2, "two verify cycles");
+    assert.deepEqual(readStepSequence(env.home, ledger.runId as string), [
+      "hypothesize",
+      "instrument",
+      "reproduce",
+      "analyze",
+      "apply_fix",
+      "verify",
+      "analyze",
+      "apply_fix",
+      "verify",
+      "mark_fixed",
+      "review",
+      "re_verify",
+      "summarize",
+    ]);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("resume: interrupted run continues from next step via session/load", async () => {
+  const env = makeE2eEnv();
+  try {
+    const first = await runCli({
+      env,
+      scenario: HAPPY_SCENARIO,
+      args: [
+        "run",
+        env.repo,
+        "--bug",
+        "pagination returns one extra item",
+        "--no-open",
+        "--no-config-prompt",
+      ],
+    });
+    assert.equal(first.code, 0);
+    const ledger = readLedger(env.repo);
+    const runId = ledger.runId as string;
+
+    // Rewind the run to an interrupted state poised before review.
+    const dbPath = path.join(env.home, ".debug-agent", "state.db");
+    const db = new DatabaseSync(dbPath);
+    db.prepare(
+      "UPDATE runs SET run_status = 'interrupted', final_status = NULL, next_phase = 'review' WHERE run_id = ?",
+    ).run(runId);
+    db.close();
+
+    const resumed = await runCli({
+      env,
+      scenario: HAPPY_SCENARIO,
+      args: ["resume", env.repo, "--run", runId, "--no-open", "--no-report"],
+    });
+    assert.equal(resumed.code, 0, `stdout:\n${resumed.stdout}\nstderr:\n${resumed.stderr}`);
+    assert.match(resumed.stdout, /finished: fixed/);
+
+    // The resumed portion appended to the same step history.
+    const seq = readStepSequence(env.home, runId);
+    assert.deepEqual(seq.slice(-3), ["review", "re_verify", "summarize"]);
+
+    // session/load was used instead of session/new on resume.
+    const methods = readMockLog(env).map((e) => e.method);
+    assert.ok(methods.includes("session/load"), "resume used session/load");
   } finally {
     env.cleanup();
   }

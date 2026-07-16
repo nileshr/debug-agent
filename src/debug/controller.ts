@@ -10,29 +10,13 @@ import type {
   RuntimeSession,
 } from "../runtime/types.js";
 import type { ResolvedAgentConfig } from "../config/types.js";
-import { modelForPhase } from "../config/resolve.js";
 import { acpMcpServersParam, ensureBrowserMcpConfig } from "../mcp/browser.js";
-import {
-  countSentinels,
-  groupByHypothesis,
-  readDebugLogSince,
-  waitForDebugLog,
-} from "./log-tail.js";
-import { debugLogPath, debugRunsDir, debugRunLedgerPath } from "./repo-paths.js";
-import {
-  extractJsonFromText,
-  getPromptForPhase,
-  type PromptContext,
-} from "./prompts.js";
+import { countSentinels } from "./log-tail.js";
+import { debugRunsDir, debugRunLedgerPath } from "./repo-paths.js";
+import { LoopEngine } from "../engine/engine.js";
 import { buildFinalReportFromLedger } from "../report/build-report.js";
 import type { VerifyMode } from "./types.js";
-import {
-  type FinalReport,
-  type Hypothesis,
-  type Phase,
-  type RunLedger,
-  RunSummarySchema,
-} from "./types.js";
+import type { FinalReport, Phase, RunLedger } from "./types.js";
 import {
   AgentTraceCollector,
   LiveTraceDisplay,
@@ -78,14 +62,10 @@ export class DebugLoopController {
   private ledger!: RunLedger;
   private sessionId!: string;
   private spinner: Ora | null = null;
-  private logSinceTs = 0;
   private readonly trace = new AgentTraceCollector();
   private readonly liveTrace = new LiveTraceDisplay(5);
   private interrupted = false;
   private stoppedAfterPlan = false;
-  /** Where to go after mark_fixed succeeds (review vs summarize). */
-  private markFixedNext: Phase = "review";
-  private markFixedRetries = 0;
 
   constructor(options: ControllerOptions) {
     this.options = {
@@ -196,6 +176,12 @@ export class DebugLoopController {
         transcript: [],
         streamBuffer: "",
         status: "running",
+        ledgerVersion: 2,
+        runtime: "acp",
+        agentPreset: "cursor",
+        autonomy: "static",
+        stepHistory: [],
+        decisions: [],
       };
       store.createRun(
         {
@@ -314,318 +300,36 @@ export class DebugLoopController {
   }
 
   private async runPhaseLoop(startPhase: Phase = "hypothesize"): Promise<void> {
-    let phase: Phase = startPhase;
-    const store = getRunStore();
-
-    while (phase !== "done") {
-      this.ledger.phase = phase;
-      store.recordPhaseStart(this.ledger.runId, phase, this.ledger);
-      this.options.onPhase?.(phase);
-      this.options.runLog?.section(`phase:${phase}`);
-      this.trace.setPhase(phase);
-      this.liveTrace.beginPhase(phase);
-      this.spinner = ora(chalk.cyan(`Phase: ${phase}`)).start();
-
-      let nextPhase: Phase = "done";
-
-      switch (phase) {
-        case "hypothesize":
-          await this.sendPhasePrompt("hypothesize");
-          if (this.options.confirmPlan) {
-            const ok = await confirmPlanAfterHypothesis(this.ledger);
-            if (!ok) {
-              this.ledger.status = "partial";
-              this.stoppedAfterPlan = true;
-              nextPhase = "done";
-              this.options.runLog?.line("User stopped after plan confirmation");
-              getRunStore().markInterrupted(this.ledger.runId, this.ledger);
-              break;
-            }
-          }
-          nextPhase = "instrument";
-          break;
-
-        case "instrument":
-          this.ledger.sentinelCountBefore = countSentinels(
-            this.ledger.repoPath,
-            this.ledger.runId,
-          );
-          await this.sendPhasePrompt("instrument");
-          nextPhase = "reproduce";
-          break;
-
-        case "reproduce":
-          this.logSinceTs = Date.now();
-          await this.sendPhasePrompt("reproduce");
-          if (this.ledger.verifyMode === "browser") {
-            const entries = await waitForDebugLog({
-              repoPath: this.ledger.repoPath,
-              sinceTs: this.logSinceTs - 60_000,
-              minEntries: 1,
-              timeoutMs: 90_000,
-            });
-            this.ledger.logEntries = entries;
-          } else {
-            this.ledger.logEntries = readDebugLogSince(
-              this.ledger.repoPath,
-              this.logSinceTs - 60_000,
-            );
-          }
-          nextPhase = "analyze";
-          break;
-
-        case "analyze":
-          await this.sendPhasePrompt("analyze");
-          nextPhase = "apply_fix";
-          break;
-
-        case "apply_fix":
-          await this.sendPhasePrompt("apply_fix");
-          nextPhase = "verify";
-          break;
-
-        case "verify": {
-          this.ledger.cycles += 1;
-          await this.sendPhasePrompt("verify");
-          const verified = this.parseVerified(this.ledger.streamBuffer);
-          if (verified || this.ledger.cycles >= this.options.maxCycles) {
-            if (!verified && this.ledger.cycles >= this.options.maxCycles) {
-              this.ledger.status = "partial";
-            }
-            this.markFixedNext = "review";
-            this.markFixedRetries = 0;
-            nextPhase = "mark_fixed";
-          } else {
-            nextPhase = "analyze";
-          }
-          break;
-        }
-
-        case "mark_fixed":
-          nextPhase = await this.runMarkFixedPhase();
-          break;
-
-        case "review":
-          await this.sendPhasePrompt("review");
-          nextPhase =
-            this.ledger.reviewComments.length > 0
-              ? "apply_review"
-              : "re_verify";
-          break;
-
-        case "apply_review":
-          await this.sendPhasePrompt("apply_review");
-          nextPhase = "re_verify";
-          break;
-
-        case "re_verify": {
-          this.ledger.reviewCycles = (this.ledger.reviewCycles ?? 0) + 1;
-          await this.sendPhasePrompt("re_verify");
-          const ok = this.parseVerified(this.ledger.streamBuffer);
-          if (!ok && this.ledger.reviewComments.some((c) => !c.addressed)) {
-            nextPhase = "apply_review";
-          } else {
-            this.markFixedNext = "summarize";
-            this.markFixedRetries = 0;
-            nextPhase =
-              this.remainingSentinels() > 0 ? "mark_fixed" : "summarize";
-          }
-          break;
-        }
-
-        case "summarize":
-          if (this.remainingSentinels() > 0) {
-            this.markFixedNext = "summarize";
-            this.markFixedRetries = 0;
-            console.log(
-              chalk.yellow(
-                "Instrumentation still present before summarize — running mark_fixed cleanup.",
-              ),
-            );
-            nextPhase = "mark_fixed";
-            break;
-          }
-          await this.sendPhasePrompt("summarize");
-          this.ledger.status =
-            this.ledger.status === "partial" ? "partial" : "fixed";
-          nextPhase = "done";
-          break;
-      }
-
-      store.recordPhaseComplete(
-        this.ledger.runId,
-        phase,
-        nextPhase,
-        this.ledger,
-      );
-      phase = nextPhase;
-
-      this.spinner?.stop();
-      this.liveTrace.endPhase();
-      this.spinner?.succeed(chalk.green(`Done: ${this.ledger.phase}`));
-      this.trace.flushTextBuffer();
-      this.ledger.trace = this.trace.getEntries();
-      this.ledger.streamBuffer = "";
-    }
-  }
-
-  private remainingSentinels(): number {
-    return countSentinels(this.ledger.repoPath, this.ledger.runId);
-  }
-
-  /**
-   * Run mark_fixed with sentinel checks; retry up to 2 times if cleanup incomplete.
-   */
-  private async runMarkFixedPhase(): Promise<Phase> {
-    const remainingBefore = this.remainingSentinels();
-    await this.sendPhasePrompt("mark_fixed", {
-      sentinelCountRemaining: remainingBefore,
-      markFixedRetryAttempt: this.markFixedRetries,
-    });
-    this.ledger.sentinelCountAfter = this.remainingSentinels();
-
-    if (this.ledger.sentinelCountAfter > 0 && this.markFixedRetries < 2) {
-      this.markFixedRetries += 1;
-      this.options.runLog?.line(
-        `mark_fixed: ${this.ledger.sentinelCountAfter} sentinel(s) remain, retry ${this.markFixedRetries}`,
-      );
-      console.log(
-        chalk.yellow(
-          `Instrumentation cleanup incomplete (${this.ledger.sentinelCountAfter} sentinel(s) left) — retrying mark_fixed.`,
-        ),
-      );
-      return "mark_fixed";
-    }
-
-    if (this.ledger.sentinelCountAfter > 0) {
-      console.log(
-        chalk.yellow(
-          `Warning: ${this.ledger.sentinelCountAfter} DEBUG-INSTRUMENT sentinel(s) still in repo after mark_fixed.`,
-        ),
-      );
-    }
-    this.markFixedRetries = 0;
-    return this.markFixedNext;
-  }
-
-  private async sendPhasePrompt(
-    phase: Phase,
-    extra?: Pick<PromptContext, "sentinelCountRemaining" | "markFixedRetryAttempt">,
-  ): Promise<void> {
-    const stored = this.ledger.logEntries as ReturnType<typeof readDebugLogSince>;
-    const logSnippet =
-      stored.length > 0
-        ? JSON.stringify(groupByHypothesis(stored), null, 2)
-        : fs.existsSync(debugLogPath(this.ledger.repoPath))
-          ? fs.readFileSync(debugLogPath(this.ledger.repoPath), "utf8").slice(-4000)
-          : undefined;
-
-    const text = getPromptForPhase(phase, {
+    const engine = new LoopEngine({
       ledger: this.ledger,
-      logSnippet,
-      sinceTs: this.logSinceTs,
-      ...extra,
+      session: this.session,
+      agentConfig: this.options.agentConfig,
+      maxCycles: this.options.maxCycles,
+      runLog: this.options.runLog,
+      confirmPlanGate: this.options.confirmPlan
+        ? () => confirmPlanAfterHypothesis(this.ledger)
+        : undefined,
+      callbacks: {
+        onStepStart: (stepId) => {
+          this.options.onPhase?.(stepId as Phase);
+          this.options.runLog?.section(`phase:${stepId}`);
+          this.trace.setPhase(stepId);
+          this.liveTrace.beginPhase(stepId);
+          this.spinner = ora(chalk.cyan(`Phase: ${stepId}`)).start();
+        },
+        onStepEnd: (stepId) => {
+          this.spinner?.stop();
+          this.liveTrace.endPhase();
+          this.spinner?.succeed(chalk.green(`Done: ${stepId}`));
+          this.trace.flushTextBuffer();
+          this.ledger.trace = this.trace.getEntries();
+          this.ledger.streamBuffer = "";
+        },
+      },
     });
 
-    this.options.runLog?.line(`prompt:${phase} bytes=${text.length}`);
-
-    await this.session.prompt({
-      text,
-      mode: phase === "hypothesize" ? "plan" : "execute",
-      model: modelForPhase(phase, this.options.agentConfig.models),
-    });
-
-    this.parsePhaseResult(phase, this.ledger.streamBuffer);
-    this.options.runLog?.line(
-      `phase:${phase} streamBytes=${this.ledger.streamBuffer.length}`,
-    );
-  }
-
-  private parsePhaseResult(phase: Phase, buffer: string): void {
-    switch (phase) {
-      case "hypothesize": {
-        const data = extractJsonFromText<{ hypotheses?: Hypothesis[] }>(buffer);
-        if (data?.hypotheses?.length) {
-          this.ledger.hypotheses = data.hypotheses;
-        } else if (this.ledger.todos.length) {
-          this.ledger.hypotheses = this.ledger.todos.map((t, i) => ({
-            id: t.id,
-            rank: i + 1,
-            statement: t.content,
-            status: "pending" as const,
-          }));
-        }
-        break;
-      }
-      case "instrument": {
-        const data = extractJsonFromText<{ filesTouched?: string[] }>(buffer);
-        if (data?.filesTouched) {
-          this.ledger.filesTouched = data.filesTouched;
-        }
-        break;
-      }
-      case "reproduce": {
-        const data = extractJsonFromText<{ steps?: string[] }>(buffer);
-        if (data?.steps) this.ledger.reproductionSteps = data.steps;
-        break;
-      }
-      case "analyze": {
-        const data = extractJsonFromText<{
-          confirmedHypothesis?: string;
-          fixProposal?: string;
-        }>(buffer);
-        if (data?.confirmedHypothesis) {
-          this.ledger.confirmedHypothesisId = data.confirmedHypothesis;
-          const h = this.ledger.hypotheses.find(
-            (x) => x.id === data.confirmedHypothesis,
-          );
-          if (h) h.status = "confirmed";
-        }
-        if (data?.fixProposal) this.ledger.fixProposed = data.fixProposal;
-        break;
-      }
-      case "mark_fixed": {
-        const data = extractJsonFromText<{ cleaned?: boolean }>(buffer);
-        if (data?.cleaned === false) {
-          this.options.runLog?.line("mark_fixed: agent reported cleaned=false");
-        }
-        break;
-      }
-      case "apply_review": {
-        const data = extractJsonFromText<{ addressed?: string[] }>(buffer);
-        if (data?.addressed?.length) {
-          for (const id of data.addressed) {
-            const comment = this.ledger.reviewComments.find((c) => c.id === id);
-            if (comment) comment.addressed = true;
-          }
-        }
-        break;
-      }
-      case "review": {
-        const data = extractJsonFromText<{
-          comments?: Array<{ id: string; text: string; addressed?: boolean }>;
-        }>(buffer);
-        if (data?.comments) {
-          this.ledger.reviewComments = data.comments.map((c) => ({
-            id: c.id,
-            text: c.text,
-            addressed: c.addressed ?? false,
-          }));
-        }
-        break;
-      }
-      case "summarize": {
-        const data = extractJsonFromText<Record<string, unknown>>(buffer);
-        const parsed = RunSummarySchema.safeParse(data);
-        if (parsed.success) this.ledger.summary = parsed.data;
-        break;
-      }
-    }
-  }
-
-  private parseVerified(buffer: string): boolean {
-    const data = extractJsonFromText<{ verified?: boolean }>(buffer);
-    return data?.verified === true;
+    const result = await engine.run(startPhase);
+    this.stoppedAfterPlan = result.stoppedAfterPlan;
   }
 
   private pushLiveTrace(): void {
