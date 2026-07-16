@@ -3,11 +3,15 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import ora, { type Ora } from "ora";
 import chalk from "chalk";
-import { AcpClient } from "../acp/client.js";
+import { AcpRuntime } from "../runtime/acp/adapter.js";
+import type {
+  AgentRuntime,
+  RuntimeEvent,
+  RuntimeSession,
+} from "../runtime/types.js";
 import type { ResolvedAgentConfig } from "../config/types.js";
 import { modelForPhase } from "../config/resolve.js";
 import { acpMcpServersParam, ensureBrowserMcpConfig } from "../mcp/browser.js";
-import { resolveSpawnCwd } from "../util/cwd.js";
 import {
   countSentinels,
   groupByHypothesis,
@@ -29,7 +33,6 @@ import {
   type RunLedger,
   RunSummarySchema,
 } from "./types.js";
-import type { CursorUpdateTodosParams } from "../acp/types.js";
 import {
   AgentTraceCollector,
   LiveTraceDisplay,
@@ -52,6 +55,8 @@ export interface ControllerOptions {
   resumeSessionId?: string;
   /** Resume loop state from ~/.debug-agent/state.db (phase + ledger). */
   resumeRunId?: string;
+  /** Inject a pre-built agent runtime (tests, alternative runtimes). */
+  runtime?: AgentRuntime;
   onPhase?: (phase: Phase) => void;
   /** Optional run log writer (full diagnostic log for issue reports). */
   runLog?: import("../logging/run-log.js").RunLogWriter;
@@ -64,12 +69,12 @@ export interface ControllerResult {
 }
 
 export class DebugLoopController {
-  private client: AcpClient;
+  private runtime!: AgentRuntime;
+  private session!: RuntimeSession;
   private readonly options: Required<
     Pick<ControllerOptions, "maxCycles" | "writeReport" | "openReport">
   > &
     ControllerOptions;
-  private activeModel = "";
   private ledger!: RunLedger;
   private sessionId!: string;
   private spinner: Ora | null = null;
@@ -89,24 +94,29 @@ export class DebugLoopController {
       openReport: options.openReport ?? true,
       ...options,
     };
-    this.activeModel = options.agentConfig.models.fixer;
-    this.client = new AcpClient({
-      spawnCwd: resolveSpawnCwd(options.repoPath),
-      permissionPolicy: { repoPath: path.resolve(options.repoPath) },
-      onStdoutChunk: (text) => {
-        if (this.ledger) {
-          this.ledger.streamBuffer += text;
-          this.ledger.transcript.push(text);
-          this.trace.appendStreamChunk(text);
-          this.pushLiveTrace();
-        }
-      },
-      onTrace: (event) => {
-        if (!this.ledger) return;
-        this.trace.add(event.kind, event.text);
+  }
+
+  private handleRuntimeEvent(ev: RuntimeEvent): void {
+    if (!this.ledger) return;
+    switch (ev.type) {
+      case "text":
+        this.ledger.streamBuffer += ev.text;
+        this.ledger.transcript.push(ev.text);
+        this.trace.appendStreamChunk(ev.text);
         this.pushLiveTrace();
-      },
-    });
+        break;
+      case "trace":
+        this.trace.add(ev.kind, ev.text);
+        this.pushLiveTrace();
+        break;
+      case "plan":
+        this.ledger.todos = ev.entries.map((t) => ({
+          id: t.id ?? "",
+          content: t.content,
+          status: t.status,
+        }));
+        break;
+    }
   }
 
   async run(): Promise<ControllerResult> {
@@ -145,7 +155,6 @@ export class DebugLoopController {
         browserMcp:
           this.ledger.browserMcp ?? this.options.agentConfig.browserMcp,
       };
-      this.activeModel = "";
       startPhase =
         loaded.nextPhase === "done" ? "summarize" : loaded.nextPhase;
       this.options.resumeSessionId =
@@ -218,26 +227,33 @@ export class DebugLoopController {
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
 
-    try {
-      await this.client.start();
-      await this.client.initialize();
-      await this.client.authenticate();
+    const resuming = Boolean(
+      this.options.resumeSessionId || this.options.resumeRunId,
+    );
+    this.runtime =
+      this.options.runtime ??
+      new AcpRuntime({
+        repoPath,
+        mcpServers: acpMcpServersParam(),
+        permissionPolicy: { repoPath },
+        // Fresh sessions start on the fixer model; on resume force a re-send.
+        initialModelId: resuming
+          ? undefined
+          : this.options.agentConfig.models.fixer,
+        onEvent: (ev) => this.handleRuntimeEvent(ev),
+      });
 
-      const mcpServers = acpMcpServersParam();
+    try {
+      await this.runtime.start();
+
       if (this.options.resumeSessionId) {
-        await this.client.sessionLoad({
-          sessionId: this.options.resumeSessionId,
-          cwd: repoPath,
-          mcpServers,
-        });
-        this.sessionId = this.options.resumeSessionId;
+        this.session = await this.runtime.resumeSession(
+          this.options.resumeSessionId,
+        );
       } else {
-        const session = await this.client.sessionNew({
-          cwd: repoPath,
-          mcpServers,
-        });
-        this.sessionId = session.sessionId;
+        this.session = await this.runtime.createSession();
       }
+      this.sessionId = this.session.sessionId;
       this.ledger.sessionId = this.sessionId;
       this.ledger.sessionResumed = Boolean(
         this.options.resumeSessionId || this.options.resumeRunId,
@@ -250,10 +266,6 @@ export class DebugLoopController {
         ),
       );
       console.log(chalk.dim(`Run: ${this.ledger.runId}`));
-
-      await this.applyModelForPhase(startPhase);
-
-      this.client.onUpdateTodos((params) => this.handleTodos(params));
 
       await this.runPhaseLoop(startPhase);
 
@@ -295,7 +307,7 @@ export class DebugLoopController {
     } finally {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
-      await this.client.stop();
+      await this.runtime.stop();
       this.liveTrace.endPhase();
       this.spinner?.stop();
     }
@@ -307,7 +319,6 @@ export class DebugLoopController {
 
     while (phase !== "done") {
       this.ledger.phase = phase;
-      await this.applyModelForPhase(phase);
       store.recordPhaseStart(this.ledger.runId, phase, this.ledger);
       this.options.onPhase?.(phase);
       this.options.runLog?.section(`phase:${phase}`);
@@ -319,7 +330,6 @@ export class DebugLoopController {
 
       switch (phase) {
         case "hypothesize":
-          await this.client.setMode(this.sessionId, "plan");
           await this.sendPhasePrompt("hypothesize");
           if (this.options.confirmPlan) {
             const ok = await confirmPlanAfterHypothesis(this.ledger);
@@ -336,7 +346,6 @@ export class DebugLoopController {
           break;
 
         case "instrument":
-          await this.client.setMode(this.sessionId, "agent");
           this.ledger.sentinelCountBefore = countSentinels(
             this.ledger.repoPath,
             this.ledger.runId,
@@ -460,16 +469,6 @@ export class DebugLoopController {
     }
   }
 
-  private async applyModelForPhase(phase: Phase): Promise<void> {
-    const modelId = modelForPhase(phase, this.options.agentConfig.models);
-    if (modelId === this.activeModel) return;
-    await this.client.setModel(this.sessionId, modelId);
-    this.activeModel = modelId;
-    this.ledger.model = this.options.agentConfig.models.fixer;
-    this.ledger.plannerModel = this.options.agentConfig.models.planner;
-    this.ledger.reviewer = this.options.agentConfig.models.reviewer;
-  }
-
   private remainingSentinels(): number {
     return countSentinels(this.ledger.repoPath, this.ledger.runId);
   }
@@ -530,9 +529,10 @@ export class DebugLoopController {
 
     this.options.runLog?.line(`prompt:${phase} bytes=${text.length}`);
 
-    await this.client.sessionPrompt({
-      sessionId: this.sessionId,
-      prompt: [{ type: "text", text }],
+    await this.session.prompt({
+      text,
+      mode: phase === "hypothesize" ? "plan" : "execute",
+      model: modelForPhase(phase, this.options.agentConfig.models),
     });
 
     this.parsePhaseResult(phase, this.ledger.streamBuffer);
@@ -637,14 +637,6 @@ export class DebugLoopController {
     if (this.spinner?.isSpinning) {
       this.spinner.render();
     }
-  }
-
-  private handleTodos(params: CursorUpdateTodosParams): void {
-    this.ledger.todos = params.todos.map((t) => ({
-      id: t.id,
-      content: t.content,
-      status: t.status,
-    }));
   }
 
   private persistLedger(): void {

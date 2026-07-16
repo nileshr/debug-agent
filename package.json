@@ -14,6 +14,7 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
     "prepack": "npm run build",
     "prepublishOnly": "node scripts/no-npm-publish.mjs",
     "pack:tarball": "npm pack",

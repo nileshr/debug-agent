@@ -1,5 +1,14 @@
 export { AcpClient, type AcpClientOptions } from "./acp/client.js";
 export * from "./acp/types.js";
+export * from "./runtime/types.js";
+export { AcpRuntime, type AcpRuntimeOptions } from "./runtime/acp/adapter.js";
+export { extractJsonFromText } from "./runtime/json-extract.js";
+export {
+  decidePermission,
+  permissionResponse,
+  type PermissionDecision,
+  type PermissionPolicyOptions,
+} from "./runtime/permissions.js";
 export { DebugLoopController, type ControllerOptions, type ControllerResult } from "./debug/controller.js";
 export * from "./debug/types.js";
 export { emitHtmlReport, REPORTS_DIR, reportFilePath } from "./report/emit.js";
