@@ -6,8 +6,8 @@ Works with **any ACP agent** via presets — Cursor (`agent acp`, the default), 
 
 The loop itself has three autonomy levels (`--autonomy`):
 
-- `static` (default) — the classic fixed phase flow.
-- `guided` — a deterministic orchestrator handles hinges: retries steps whose
+- `static` — the classic fixed phase flow.
+- `guided` (default) — a deterministic orchestrator handles hinges: retries steps whose
   structured result was missing, inserts a read-only `explore` step when
   analysis is inconclusive, and pauses to ask you questions when it can't
   proceed confidently (exit code 3; continue with `debug resume --answer "..."`).

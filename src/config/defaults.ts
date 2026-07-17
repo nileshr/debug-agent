@@ -10,7 +10,10 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
   },
   browserMcp: "playwright",
   runtime: "acp",
-  autonomy: "static",
+  // Default since loop v2: deterministic orchestrator heuristics handle
+  // hinges (retry unparsable results, insert explore, ask the user).
+  // Set autonomy: "static" to restore the classic fixed flow exactly.
+  autonomy: "guided",
   acp: { preset: "cursor" },
 };
 
