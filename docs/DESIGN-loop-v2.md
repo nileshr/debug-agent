@@ -352,6 +352,32 @@ surfacing, and `resolveSpawnCwd` are protocol-level, not Cursor-level — they s
 
 ## 5. Flue runtime (`src/runtime/flue/adapter.ts`)
 
+> **STATUS UPDATE (implementation, July 2026): deferred by decision.**
+> A probe of the real `@flue/runtime@1.0.0-beta.9` package found two material
+> deviations from the assumptions below:
+>
+> 1. **No public in-process embedding API.** A `FlueHarness` (and therefore
+>    `session()`/`prompt()`) is only supplied by a Flue runner to code running
+>    *inside* a Flue workflow action (`context.harness`). The shipped docs are
+>    explicit: "application code does not name or initialize workflow
+>    harnesses." Bootstrapping a harness inside debug-agent's own process
+>    requires `@flue/runtime/internal` (`configureFlueRuntime`, `NodeRuntime`),
+>    which the package marks "not part of the public API."
+> 2. **Structured results are Valibot-only.** The runtime hard-asserts
+>    `~standard.vendor === "valibot"` on `result:` and tool schemas, so zod
+>    schemas cannot pass through Standard Schema (a loose-valibot wrapper +
+>    zod post-validation would be needed).
+>
+> Decision: ship the runtime-agnostic architecture with the generalized ACP
+> adapter only for now. The `AgentRuntime` interface, the `runtime: "flue"`
+> config value, and this section are kept so a Flue adapter can land once Flue
+> exposes a public embedding surface. The nearest-term alternative satisfying
+> the same "in-process, multi-provider" goal is a pi adapter
+> (`@earendil-works/pi-coding-agent` SDK — the layer Flue itself builds on),
+> which has a public `AgentSession` API that maps 1:1 onto `AgentRuntime`.
+
+The original design assumptions (kept for when the adapter lands):
+
 Flue (flueframework.com, the Astro team) is a TypeScript agent harness built on pi's provider
 layer (`@earendil-works/pi-ai`): `defineAgent`, sessions, `defineTool`, MCP connections,
 sandboxes, durable session streams, structured results.
@@ -757,11 +783,10 @@ handlers).
 1. **Orchestrator default on ACP**: is a cheap agent-side model acceptable as the default
    `models.orchestrator`, or should guided mode ship heuristics-only until a model is
    explicitly configured?
-2. **Flue result schemas**: does Flue's structured-result option accept Standard Schema
-   (zod ≥3.24) or strictly Valibot? Decides direct pass-through vs the `submit_step_result`
-   tool fallback.
-3. **Flue session resume**: verify the durable-stream reattach API once `@flue/runtime` is
-   installed; if absent, Flue resume = fresh session + ledger-driven prompts.
+2. **Flue result schemas** — RESOLVED: strictly Valibot (`~standard.vendor === "valibot"`
+   asserted at runtime in 1.0.0-beta.9); pass-through of zod schemas is not possible.
+3. **Flue session resume** — MOOT for now: the Flue adapter is deferred (see §5 status
+   update) because 1.0-beta exposes no public in-process embedding API.
 4. **Shared state DB across versions**: is readable-but-degraded acceptable for older builds
    after the v2 migration, or do we fork-on-migrate a copy of `state.db`?
 5. **MCP file cleanup**: should the ACP file strategy remove the browser-MCP entry from
