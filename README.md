@@ -2,13 +2,29 @@
 
 CLI debugger that runs a multi-phase debug loop on your codebase: hypothesize → instrument → reproduce → analyze → fix → verify → review → HTML report.
 
-Uses **Cursor ACP** (`agent acp`) today. **Codex and other ACP agents** are on the roadmap.
+Works with **any ACP agent** via presets — Cursor (`agent acp`, the default), Claude Code (`claude-agent-acp`), Codex (`codex-acp`), Gemini CLI (`gemini --experimental-acp`), or a custom command. Pick with `--agent <preset>` or `acp.preset` in config.
+
+The loop itself has three autonomy levels (`--autonomy`):
+
+- `static` (default) — the classic fixed phase flow.
+- `guided` — a deterministic orchestrator handles hinges: retries steps whose
+  structured result was missing, inserts a read-only `explore` step when
+  analysis is inconclusive, and pauses to ask you questions when it can't
+  proceed confidently (exit code 3; continue with `debug resume --answer "..."`).
+  Set `models.orchestrator` (or `--orchestrator-model`) to let an LLM make
+  those hinge decisions instead of heuristics.
+- `autonomous` — an LLM decides after every step (guardrails still enforce
+  budgets, legal transitions, and verify-before-finish; every decision is
+  recorded with its rationale in the HTML report).
+
+Exit codes: `0` fixed · `1` error · `2` partial · `3` waiting on your answers.
 
 ## Requirements
 
-- Node.js 20+
-- [Cursor CLI](https://cursor.com/docs/cli): `agent` on PATH
-- `agent login` (or `CURSOR_API_KEY`)
+- Node.js 22.5+
+- An ACP agent on PATH — by default the [Cursor CLI](https://cursor.com/docs/cli)
+  (`agent` + `agent login` / `CURSOR_API_KEY`); for other presets, that agent's
+  own install + auth (e.g. `ANTHROPIC_API_KEY` for `--agent claude`)
 - Chrome (when verifying in the browser via `--url`)
 
 ## Install
@@ -60,6 +76,9 @@ debug setup --repo .                  # check current repo + MCP
 debug config show                       # view saved model / browser prefs
 debug upgrade                           # update from latest release
 debug resume                            # continue an interrupted run
+debug resume --answer "..."             # answer a waiting run's questions (exit code 3)
+debug run . --agent claude --bug "..."  # use another ACP agent preset
+debug run . --autonomy guided --bug "..."  # dynamic loop with heuristics
 ```
 
 The `debug-agent` bin is an alias for the same CLI.

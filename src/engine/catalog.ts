@@ -325,8 +325,3 @@ export function buildStepCatalog(): Map<string, StepDefinition> {
 
   return new Map(steps.map((s) => [s.id, s]));
 }
-
-/** Ordered nominal path (excludes the dynamic-only re_verify detours). */
-export function catalogStepIds(catalog: Map<string, StepDefinition>): string[] {
-  return [...catalog.keys()];
-}
