@@ -95,7 +95,7 @@ export interface AgentRuntime {
    */
   oneShot<T>(
     promptText: string,
-    schema: z.ZodType<T>,
+    schema: z.ZodType<T, z.ZodTypeDef, unknown>,
     opts?: { model?: string },
   ): Promise<T | null>;
 }

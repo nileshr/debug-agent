@@ -147,6 +147,26 @@ export function renderReportHtml(report: FinalReport): string {
     })
     .join("");
 
+  const decisionTimeline = (report.decisionTimeline ?? [])
+    .map((d) => {
+      const target =
+        d.nextStepId != null ? ` → <code>${esc(d.nextStepId)}</code>` : "";
+      const overridden = d.overridden
+        ? `<div class="decision-overridden">vetoed: <code>${esc(d.overridden.action)}${d.overridden.nextStepId ? ` → ${esc(d.overridden.nextStepId)}` : ""}</code> — ${esc(d.overridden.reason)}</div>`
+        : "";
+      const model = d.modelId ? ` · ${esc(d.modelId)}` : "";
+      return `<div class="decision-item">
+        <div class="decision-meta">
+          <span class="pill decision-${esc(d.decidedBy)}">${esc(d.decidedBy)}</span>
+          <span class="decision-step">after <code>${esc(d.afterStep)}</code></span>
+          <span class="decision-action">${esc(d.action)}${target}${model}</span>
+        </div>
+        ${d.rationale ? `<div class="decision-rationale">${esc(d.rationale)}</div>` : ""}
+        ${overridden}
+      </div>`;
+    })
+    .join("");
+
   const lifecycleBanner =
     report.runLifecycleStatus && report.runLifecycleStatus !== "completed"
       ? `<div class="banner ${lifecycleClass(report.runLifecycleStatus)}">
@@ -327,6 +347,21 @@ export function renderReportHtml(report: FinalReport): string {
     letter-spacing: 0.04em;
   }
   .trace-text { white-space: pre-wrap; word-break: break-word; }
+  .decision-list { display: flex; flex-direction: column; gap: 10px; max-height: 520px; overflow: auto; }
+  .decision-item {
+    border-left: 3px solid var(--accent);
+    padding: 8px 12px;
+    background: var(--bg);
+    font-size: 0.85rem;
+  }
+  .decision-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
+  .decision-rationale { color: var(--muted); }
+  .decision-overridden { color: var(--abandoned); font-size: 0.8rem; margin-top: 4px; }
+  .pill.decision-static { background: #eef2ff; color: #3730a3; }
+  .pill.decision-heuristic { background: #ecfeff; color: #155e75; }
+  .pill.decision-llm { background: #f5f3ff; color: #6d28d9; }
+  .pill.decision-user { background: #f0fdf4; color: #166534; }
+  .pill.decision-guardrail_override { background: #fef2f2; color: #991b1b; }
   .resume-cmd {
     margin: 4px 0 12px;
     padding: 10px 12px;
@@ -412,6 +447,14 @@ export function renderReportHtml(report: FinalReport): string {
       ? `<section><h2>Phase timeline</h2>
     <div class="phase-timeline">${phaseTimeline}</div>
     <p class="caption">Phase status from run state DB${isInProgress ? " (run in progress)" : ""}</p></section>`
+      : ""
+  }
+
+  ${
+    decisionTimeline
+      ? `<section><h2>Decisions</h2>
+    <div class="decision-list">${decisionTimeline}</div>
+    <p class="caption">Every loop-control decision with who made it (static policy, heuristic, LLM orchestrator, user, or a guardrail override) and why.</p></section>`
       : ""
   }
 

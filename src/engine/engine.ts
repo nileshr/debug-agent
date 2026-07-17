@@ -22,6 +22,15 @@ import {
   type StepRunContext,
 } from "./catalog.js";
 import { buildStepPolicy, DONE, type StepPolicy, type TransitionContext } from "./policy.js";
+import { Orchestrator } from "./orchestrator.js";
+import { applyGuardrails } from "./guardrails.js";
+import {
+  askInteractively,
+  canAskInteractively,
+  userAnswersBlock,
+} from "./escalation.js";
+import type { Autonomy } from "../config/types.js";
+import type { AgentRuntime } from "../runtime/types.js";
 
 export interface EngineCallbacks {
   onStepStart?: (stepId: string) => void;
@@ -33,8 +42,13 @@ export interface LoopEngineOptions {
   session: RuntimeSession;
   agentConfig: ResolvedAgentConfig;
   maxCycles: number;
+  /** static: historical fixed transitions; guided/autonomous: orchestrated. */
+  autonomy?: Autonomy;
+  /** Runtime handle for orchestrator one-shot decisions (guided/autonomous). */
+  runtime?: AgentRuntime;
   runLog?: RunLogWriter;
   callbacks?: EngineCallbacks;
+  onWarn?: (message: string) => void;
   /** TTY confirmation gate after hypothesize (today's --confirm-plan). */
   confirmPlanGate?: () => Promise<boolean>;
   catalog?: Map<string, StepDefinition>;
@@ -43,6 +57,8 @@ export interface LoopEngineOptions {
 
 export interface EngineRunResult {
   stoppedAfterPlan: boolean;
+  /** Run paused pending user answers (ledger.pendingQuestions); exit code 3. */
+  waitingOnUser?: boolean;
 }
 
 /**
@@ -94,6 +110,7 @@ export class LoopEngine {
     nextStepId: string | undefined,
     rationale: string,
     decidedBy: DecisionRecord["decidedBy"] = "static",
+    extras?: Pick<DecisionRecord, "overridden" | "modelId" | "latencyMs">,
   ): DecisionRecord {
     const decision: DecisionRecord = {
       seq: (this.opts.ledger.decisions?.length ?? 0) + 1,
@@ -103,6 +120,7 @@ export class LoopEngine {
       action,
       nextStepId,
       rationale,
+      ...extras,
     };
     this.opts.ledger.decisions?.push(decision);
     getRunStore().recordDecision(this.opts.ledger.runId, decision);
@@ -136,7 +154,24 @@ export class LoopEngine {
   async run(startStepId: string): Promise<EngineRunResult> {
     const { ledger, callbacks, runLog, session, agentConfig } = this.opts;
     const store = getRunStore();
+    const autonomy: Autonomy = this.opts.autonomy ?? "static";
+    const orchestrator =
+      autonomy !== "static" && this.opts.runtime
+        ? new Orchestrator({
+            autonomy,
+            policy: this.policy,
+            runtime: this.opts.runtime,
+            orchestratorModel: this.opts.agentConfig.models.orchestrator,
+            repoPath: ledger.repoPath,
+            onWarn: this.opts.onWarn,
+          })
+        : null;
+    const catalogIds = new Set(this.catalog.keys());
     let current = startStepId;
+    let insertReturnTo: string | null = null;
+    let insertedCount = ledger.stepHistory?.filter((s) => s.inserted).length ?? 0;
+    let nextIsInserted = false;
+    let pendingAddendum: string | null = null;
 
     while (current !== DONE) {
       const step = this.catalog.get(current);
@@ -189,12 +224,19 @@ export class LoopEngine {
         stepId: current,
         attempt,
         startedAt: Date.now(),
+        ...(nextIsInserted ? { inserted: true } : {}),
       };
+      nextIsInserted = false;
       ledger.stepHistory?.push(record);
 
       await step.beforePrompt?.(ctx);
 
-      const text = this.buildPrompt(step, ctx);
+      let text =
+        this.buildPrompt(step, ctx) + userAnswersBlock(ledger.userAnswers);
+      if (pendingAddendum) {
+        text += `\n\n${pendingAddendum}`;
+        pendingAddendum = null;
+      }
       runLog?.line(`prompt:${step.id} bytes=${text.length}`);
 
       const result = await session.prompt({
@@ -236,19 +278,175 @@ export class LoopEngine {
         }
       }
 
-      const transition = this.policy.defaultNext[current];
-      if (!transition) {
-        throw new Error(`No transition defined for step: ${current}`);
-      }
       const tctx: TransitionContext = { ...ctx, lastData: result.data };
-      const next = transition(tctx);
 
-      this.recordDecision(
-        current,
-        this.classifyTransition(current, next),
-        next === DONE ? undefined : next,
-        "Static policy transition.",
-      );
+      // Deterministic return after an inserted step (bounded detour).
+      if (insertReturnTo) {
+        const returnTo = insertReturnTo;
+        insertReturnTo = null;
+        this.recordDecision(
+          current,
+          "advance",
+          returnTo,
+          "Returning to the interrupted flow after the inserted step.",
+          "heuristic",
+        );
+        store.recordPhaseComplete(
+          ledger.runId,
+          current as Phase,
+          returnTo as Phase,
+          ledger,
+        );
+        callbacks?.onStepEnd?.(current);
+        current = returnTo;
+        continue;
+      }
+
+      let next: string;
+
+      if (!orchestrator) {
+        const transition = this.policy.defaultNext[current];
+        if (!transition) {
+          throw new Error(`No transition defined for step: ${current}`);
+        }
+        next = transition(tctx);
+        this.recordDecision(
+          current,
+          this.classifyTransition(current, next),
+          next === DONE ? undefined : next,
+          "Static policy transition.",
+        );
+      } else {
+        // Hard budget: absolute step count (engine-enforced, dynamic modes).
+        if ((ledger.stepHistory?.length ?? 0) >= this.policy.budgets.maxTotalSteps) {
+          ledger.status = "partial";
+          this.recordDecision(
+            current,
+            "abort",
+            undefined,
+            `Total step budget exhausted (${this.policy.budgets.maxTotalSteps}); finishing as partial.`,
+            "guardrail_override",
+          );
+          store.recordPhaseComplete(ledger.runId, current as Phase, "done", ledger);
+          callbacks?.onStepEnd?.(current);
+          break;
+        }
+
+        const outcome = await orchestrator.decide({
+          stepJustRan: step,
+          attempt,
+          result,
+          ctx: tctx,
+          insertedCount,
+          totalSteps: ledger.stepHistory?.length ?? 0,
+        });
+        const guarded = applyGuardrails(
+          {
+            step,
+            policy: this.policy,
+            ctx: tctx,
+            attempt,
+            insertedCount,
+            catalogIds,
+          },
+          outcome.decision,
+        );
+        const decision = guarded.decision;
+        const decidedBy = guarded.overridden
+          ? "guardrail_override"
+          : outcome.decidedBy;
+        const overriddenExtra = guarded.overridden
+          ? {
+              overridden: {
+                action: guarded.overridden.decision.action as DecisionAction,
+                nextStepId:
+                  "nextStepId" in guarded.overridden.decision
+                    ? guarded.overridden.decision.nextStepId
+                    : "stepId" in guarded.overridden.decision
+                      ? guarded.overridden.decision.stepId
+                      : undefined,
+                reason: guarded.overridden.reason,
+              },
+            }
+          : {};
+
+        switch (decision.action) {
+          case "advance":
+          case "skip_to":
+            next = decision.nextStepId;
+            break;
+          case "done":
+            next = DONE;
+            break;
+          case "retry":
+            next = current;
+            pendingAddendum = decision.promptAddendum ?? null;
+            break;
+          case "insert":
+            insertReturnTo = current;
+            insertedCount += 1;
+            nextIsInserted = true;
+            next = decision.stepId;
+            break;
+          case "abort":
+            ledger.status = "partial";
+            next = DONE;
+            break;
+          case "ask_user": {
+            this.recordDecision(
+              current,
+              "ask_user",
+              undefined,
+              decision.rationale,
+              decidedBy,
+              { ...overriddenExtra, modelId: outcome.modelId, latencyMs: outcome.latencyMs },
+            );
+            if (canAskInteractively()) {
+              const answers = await askInteractively(decision.questions);
+              ledger.userAnswers = [...(ledger.userAnswers ?? []), ...answers];
+              const resumed = this.policy.defaultNext[current](tctx);
+              this.recordDecision(
+                current,
+                resumed === DONE ? "done" : "advance",
+                resumed === DONE ? undefined : resumed,
+                "User answered inline; continuing with the default transition.",
+                "user",
+              );
+              store.recordPhaseComplete(
+                ledger.runId,
+                current as Phase,
+                resumed as Phase,
+                ledger,
+              );
+              callbacks?.onStepEnd?.(current);
+              current = resumed;
+              continue;
+            }
+            // Non-interactive: pause the run and hand off to `debug resume`.
+            const resumeStep = this.policy.defaultNext[current](tctx);
+            ledger.pendingQuestions = decision.questions;
+            store.markWaitingOnUser(
+              ledger.runId,
+              ledger,
+              resumeStep === DONE ? "summarize" : resumeStep,
+            );
+            callbacks?.onStepEnd?.(current);
+            return { stoppedAfterPlan: false, waitingOnUser: true };
+          }
+        }
+
+        this.recordDecision(
+          current,
+          decision.action === "done"
+            ? "done"
+            : (decision.action as DecisionAction),
+          next === DONE ? undefined : next,
+          decision.rationale,
+          decidedBy,
+          { ...overriddenExtra, modelId: outcome.modelId, latencyMs: outcome.latencyMs },
+        );
+      }
+
       store.recordPhaseComplete(
         ledger.runId,
         current as Phase,

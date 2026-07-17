@@ -7,7 +7,12 @@ import type { DecisionRecord, Phase, RunLedger, VerifyMode } from "./types.js";
 
 export const STATE_DB_PATH = path.join(os.homedir(), ".debug-agent", "state.db");
 
-export type RunLifecycleStatus = "running" | "interrupted" | "completed" | "failed";
+export type RunLifecycleStatus =
+  | "running"
+  | "interrupted"
+  | "completed"
+  | "failed"
+  | "waiting_on_user";
 export type PhaseRowStatus = "pending" | "running" | "completed" | "skipped";
 
 export interface PhaseTimelineRow {
@@ -464,6 +469,30 @@ export class RunStore {
       );
   }
 
+  /** Pause a run pending user answers; resume continues at `resumeStep`. */
+  markWaitingOnUser(runId: string, ledger: RunLedger, resumeStep: string): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `UPDATE runs SET
+          run_status = 'waiting_on_user',
+          current_phase = ?,
+          next_phase = ?,
+          updated_at = ?,
+          ledger_json = ?,
+          session_id = ?
+        WHERE run_id = ?`,
+      )
+      .run(
+        ledger.phase,
+        resumeStep,
+        now,
+        JSON.stringify(ledgerForStorage(ledger)),
+        ledger.sessionId,
+        runId,
+      );
+  }
+
   markCompleted(runId: string, ledger: RunLedger): void {
     const finalStatus =
       ledger.status === "running" ? "partial" : ledger.status;
@@ -538,7 +567,7 @@ export class RunStore {
     const row = this.db
       .prepare(
         `SELECT run_id FROM runs
-         WHERE repo_path = ? AND run_status = 'interrupted'
+         WHERE repo_path = ? AND run_status IN ('interrupted', 'waiting_on_user')
          ORDER BY updated_at DESC LIMIT 1`,
       )
       .get(path.resolve(repoPath)) as { run_id: string } | undefined;

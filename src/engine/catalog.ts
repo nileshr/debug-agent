@@ -6,6 +6,7 @@ import type { PromptContext } from "../debug/prompts.js";
 import {
   AnalyzeResultSchema,
   ApplyReviewResultSchema,
+  ExploreResultSchema,
   HypothesizeResultSchema,
   InstrumentResultSchema,
   MarkFixedResultSchema,
@@ -15,6 +16,7 @@ import {
   VerifyResultSchema,
   type AnalyzeResult,
   type ApplyReviewResult,
+  type ExploreResult,
   type HypothesizeResult,
   type InstrumentResult,
   type MarkFixedResult,
@@ -274,6 +276,26 @@ export function buildStepCatalog(): Map<string, StepDefinition> {
       },
       satisfies: ["verified"],
       costHint: "expensive",
+    },
+    {
+      // Not on the nominal path — inserted by the orchestrator when analysis
+      // is inconclusive (read-only investigation).
+      id: "explore",
+      title: "Explore the codebase for more evidence",
+      promptTemplate: "explore",
+      mode: "plan",
+      modelRole: "fixer",
+      resultSchema: ExploreResultSchema,
+      applyResult: (ledger, data) => {
+        const d = data as ExploreResult | null;
+        if (d?.findings?.length) {
+          ledger.exploreFindings = [
+            ...(ledger.exploreFindings ?? []),
+            ...d.findings,
+          ];
+        }
+      },
+      costHint: "moderate",
     },
     {
       id: "summarize",

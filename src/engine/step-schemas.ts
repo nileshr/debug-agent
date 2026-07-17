@@ -58,6 +58,14 @@ export const ApplyReviewResultSchema = z
   .object({ addressed: z.array(z.string()).optional() })
   .passthrough();
 
+export const ExploreResultSchema = z
+  .object({
+    findings: z.array(z.string()).optional(),
+    suspectedFiles: z.array(z.string()).optional(),
+    updatedHypothesis: z.string().optional(),
+  })
+  .passthrough();
+
 /** Summarize must match the strict run-summary contract to be recorded. */
 export const SummarizeResultSchema = RunSummarySchema;
 
@@ -69,4 +77,5 @@ export type VerifyResult = z.infer<typeof VerifyResultSchema>;
 export type MarkFixedResult = z.infer<typeof MarkFixedResultSchema>;
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;
 export type ApplyReviewResult = z.infer<typeof ApplyReviewResultSchema>;
+export type ExploreResult = z.infer<typeof ExploreResultSchema>;
 export type SummarizeResult = z.infer<typeof SummarizeResultSchema>;

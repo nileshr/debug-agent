@@ -24,6 +24,12 @@ import {
 } from "./trace.js";
 import { getRunStore } from "./run-store.js";
 import { confirmPlanAfterHypothesis } from "./plan-confirm.js";
+import {
+  askInteractively,
+  canAskInteractively,
+  matchAnswers,
+  printQuestions,
+} from "../engine/escalation.js";
 
 export interface ControllerOptions {
   repoPath: string;
@@ -42,6 +48,8 @@ export interface ControllerOptions {
   resumeRunId?: string;
   /** Inject a pre-built agent runtime (tests, alternative runtimes). */
   runtime?: AgentRuntime;
+  /** Answers to a waiting run's pending questions (debug resume --answer). */
+  answers?: string[];
   onPhase?: (phase: Phase) => void;
   /** Optional run log writer (full diagnostic log for issue reports). */
   runLog?: import("../logging/run-log.js").RunLogWriter;
@@ -51,6 +59,8 @@ export interface ControllerResult {
   ledger: RunLedger;
   report: FinalReport | null;
   reportPath: string | null;
+  /** Run paused pending user answers (see ledger.pendingQuestions). */
+  waitingOnUser?: boolean;
 }
 
 export class DebugLoopController {
@@ -75,6 +85,30 @@ export class DebugLoopController {
       openReport: options.openReport ?? true,
       ...options,
     };
+  }
+
+  /** Resolve a waiting run's questions from --answer flags or the TTY. */
+  private async applyPendingAnswers(): Promise<void> {
+    const pending = this.ledger.pendingQuestions;
+    if (!pending?.length) return;
+    if (this.options.answers?.length) {
+      this.ledger.userAnswers = [
+        ...(this.ledger.userAnswers ?? []),
+        ...matchAnswers(pending, this.options.answers),
+      ];
+    } else if (canAskInteractively()) {
+      const answers = await askInteractively(pending);
+      this.ledger.userAnswers = [
+        ...(this.ledger.userAnswers ?? []),
+        ...answers,
+      ];
+    } else {
+      printQuestions(pending);
+      throw new Error(
+        "This run is waiting on the questions above. Re-run with --answer \"...\" (repeat per question) or from an interactive terminal.",
+      );
+    }
+    this.ledger.pendingQuestions = undefined;
   }
 
   private handleRuntimeEvent(ev: RuntimeEvent): void {
@@ -126,6 +160,7 @@ export class DebugLoopController {
         );
       }
       this.ledger = { ...loaded.ledger, status: "running", streamBuffer: "" };
+      await this.applyPendingAnswers();
       this.options.agentConfig = {
         ...this.options.agentConfig,
         models: {
@@ -180,7 +215,7 @@ export class DebugLoopController {
         ledgerVersion: 2,
         runtime: "acp",
         agentPreset: "cursor",
-        autonomy: "static",
+        autonomy: this.options.agentConfig.autonomy ?? "static",
         stepHistory: [],
         decisions: [],
       };
@@ -271,13 +306,22 @@ export class DebugLoopController {
       );
       console.log(chalk.dim(`Run: ${this.ledger.runId}`));
 
-      await this.runPhaseLoop(startPhase);
+      const engineResult = await this.runPhaseLoop(startPhase);
 
       this.ledger.sentinelCountAfter = countSentinels(
         repoPath,
         this.ledger.runId,
       );
       this.persistLedger();
+
+      if (engineResult.waitingOnUser) {
+        return {
+          ledger: this.ledger,
+          report: null,
+          reportPath: null,
+          waitingOnUser: true,
+        };
+      }
 
       if (this.stoppedAfterPlan) {
         return { ledger: this.ledger, report: null, reportPath: null };
@@ -317,13 +361,21 @@ export class DebugLoopController {
     }
   }
 
-  private async runPhaseLoop(startPhase: Phase = "hypothesize"): Promise<void> {
+  private async runPhaseLoop(
+    startPhase: Phase = "hypothesize",
+  ): Promise<import("../engine/engine.js").EngineRunResult> {
     const engine = new LoopEngine({
       ledger: this.ledger,
       session: this.session,
       agentConfig: this.options.agentConfig,
       maxCycles: this.options.maxCycles,
+      autonomy: this.ledger.autonomy ?? "static",
+      runtime: this.runtime,
       runLog: this.options.runLog,
+      onWarn: (message) => {
+        this.options.runLog?.line(`engine: ${message}`);
+        console.log(chalk.dim(message));
+      },
       confirmPlanGate: this.options.confirmPlan
         ? () => confirmPlanAfterHypothesis(this.ledger)
         : undefined,
@@ -348,6 +400,7 @@ export class DebugLoopController {
 
     const result = await engine.run(startPhase);
     this.stoppedAfterPlan = result.stoppedAfterPlan;
+    return result;
   }
 
   private pushLiveTrace(): void {

@@ -104,6 +104,9 @@ export class AcpRuntime implements AgentRuntime {
   private currentMode: string | null = null;
   private activeModel: string | null = null;
   private collector: string[] | null = null;
+  /** Suppress loop events while a side-session (oneShot) prompt streams. */
+  private suppressEvents = false;
+  private oneShotSessionId: string | null = null;
   private initResult: InitializeResult | null = null;
   private authenticated = false;
   private availableModes: string[] = [];
@@ -130,9 +133,12 @@ export class AcpRuntime implements AgentRuntime {
       cursorExtensions: this.preset.extensions === "cursor",
       onStdoutChunk: (text) => {
         this.collector?.push(text);
-        this.options.onEvent?.({ type: "text", text });
+        if (!this.suppressEvents) {
+          this.options.onEvent?.({ type: "text", text });
+        }
       },
       onTrace: (event) => {
+        if (this.suppressEvents) return;
         this.options.onEvent?.({ type: "trace", kind: event.kind, text: event.text });
       },
       onPlan: (entries) => {
@@ -170,7 +176,7 @@ export class AcpRuntime implements AgentRuntime {
       askUser: this.preset.extensions === "cursor",
       sessionResume:
         this.preset.id === "cursor" ? true : Boolean(agentCaps.loadSession),
-      oneShot: false,
+      oneShot: true,
     };
   }
 
@@ -275,12 +281,55 @@ export class AcpRuntime implements AgentRuntime {
     return new AcpRuntimeSession(this, token);
   }
 
+  /**
+   * Cheap single-turn structured call on a dedicated side session (used for
+   * orchestrator decisions). Streams are suppressed from the loop's event
+   * feed; the reply's fenced JSON is validated against the schema.
+   */
   async oneShot<T>(
-    _promptText: string,
-    _schema: z.ZodType<T>,
-    _opts?: { model?: string },
+    promptText: string,
+    schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+    opts?: { model?: string },
   ): Promise<T | null> {
-    throw new Error("oneShot is not supported by the ACP runtime yet");
+    if (!this.oneShotSessionId) {
+      const result = await this.withAuthRetry(() =>
+        this.client.sessionNew({
+          cwd: this.options.repoPath,
+          mcpServers: [],
+        }),
+      );
+      this.oneShotSessionId = result.sessionId;
+    }
+    const sessionId = this.oneShotSessionId;
+
+    this.suppressEvents = true;
+    const collected: string[] = [];
+    const prevCollector = this.collector;
+    this.collector = collected;
+    try {
+      if (opts?.model) {
+        if (this.preset.configTransport === "cursor_config_option") {
+          await this.client.setModel(sessionId, opts.model);
+        } else if (
+          this.modelsDiscovered &&
+          this.availableModels.includes(opts.model)
+        ) {
+          await this.client.setSessionModel(sessionId, opts.model);
+        }
+      }
+      await this.client.sessionPrompt({
+        sessionId,
+        prompt: [{ type: "text", text: promptText }],
+      });
+    } finally {
+      this.collector = prevCollector;
+      this.suppressEvents = false;
+    }
+
+    const candidate = extractJsonFromText<unknown>(collected.join(""));
+    if (candidate == null) return null;
+    const parsed = schema.safeParse(candidate);
+    return parsed.success ? parsed.data : null;
   }
 
   /** Map an abstract step mode to this agent's mode id (preset map → fuzzy). */

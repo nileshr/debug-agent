@@ -93,7 +93,7 @@ export const FinalReportSchema = z.object({
   bugDescription: z.string(),
   status: z.enum(["fixed", "partial", "abandoned"]),
   runLifecycleStatus: z
-    .enum(["running", "interrupted", "completed", "failed"])
+    .enum(["running", "interrupted", "completed", "failed", "waiting_on_user"])
     .optional(),
   currentPhase: z.string().optional(),
   model: z.string(),
@@ -155,7 +155,20 @@ export type Phase =
   | "apply_review"
   | "re_verify"
   | "summarize"
+  | "explore"
   | "done";
+
+/** Question surfaced to the user by an ask_user escalation. */
+export interface UserQuestion {
+  id: string;
+  question: string;
+}
+
+export interface UserAnswer {
+  questionId: string;
+  question: string;
+  answer: string;
+}
 
 export type VerifyMode = "cli" | "browser";
 
@@ -243,4 +256,10 @@ export interface RunLedger {
   autonomy?: "static" | "guided" | "autonomous";
   stepHistory?: StepExecutionRecord[];
   decisions?: DecisionRecord[];
+  /** Findings from inserted explore steps. */
+  exploreFindings?: string[];
+  /** Set while a run waits on user answers (exit code 3). */
+  pendingQuestions?: UserQuestion[];
+  /** Answers provided interactively or via `debug resume --answer`. */
+  userAnswers?: UserAnswer[];
 }
