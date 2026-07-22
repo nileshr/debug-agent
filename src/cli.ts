@@ -196,6 +196,13 @@ program
   .option("--run <id>", "Run id (default: latest interrupted run for repo)")
   .option("--no-report", "Skip HTML report generation")
   .option("--no-open", "Print file:// link only; do not open browser")
+  .option(
+    "--answer <text>",
+    "Answer a waiting run's question (repeat per question, in order)",
+    (value: string, prev: string[]) => [...prev, value],
+    [] as string[],
+  )
+  .option("--answers-file <path>", "JSON file with an array of answers")
   .action(async (repoArg: string | undefined, opts) => {
     const repoPath = path.resolve(repoArg ?? ".");
     const { getRunStore, STATE_DB_PATH } = await import("./debug/run-store.js");
@@ -240,10 +247,30 @@ program
       process.exit(1);
     }
 
+    let answers: string[] = opts.answer ?? [];
+    if (opts.answersFile) {
+      try {
+        const parsed = JSON.parse(
+          (await import("node:fs")).readFileSync(opts.answersFile, "utf8"),
+        ) as unknown;
+        if (Array.isArray(parsed)) {
+          answers = [...answers, ...parsed.map(String)];
+        } else {
+          throw new Error("expected a JSON array of strings");
+        }
+      } catch (err) {
+        console.error(
+          chalk.red(`Could not read --answers-file: ${(err as Error).message}`),
+        );
+        process.exit(1);
+      }
+    }
+
     const verifyTarget = resolveVerifyTarget(repoPath, loaded.url);
     await runDebugAgent(repoPath, {
       bug: loaded.bugDescription,
       verifyTarget,
+      answers,
       configOverrides: {
         fixer: loaded.model,
         planner: loaded.ledger.plannerModel ?? loaded.model,
@@ -272,6 +299,19 @@ program
   .option("--planner-model <id>", "Planner model for hypothesize phase")
   .option("--reviewer-model <id>", "Reviewer model for review phase")
   .option("--browser-mcp <kind>", "chrome-devtools | playwright (browser verify)")
+  .option("--runtime <kind>", "Agent runtime: acp | flue")
+  .option(
+    "--agent <preset>",
+    "ACP agent preset: cursor | claude | codex | gemini | custom",
+  )
+  .option(
+    "--autonomy <level>",
+    "Loop autonomy: static (fixed flow) | guided | autonomous",
+  )
+  .option(
+    "--orchestrator-model <id>",
+    "Model for orchestrator decisions (guided/autonomous; unset = heuristics)",
+  )
   .option("--no-config-prompt", "Skip first-run interactive config picker")
   .option(
     "--confirm-plan",
@@ -337,6 +377,11 @@ async function runDebugAgent(
     plannerModel?: string;
     reviewerModel?: string;
     browserMcp?: string;
+    runtime?: string;
+    agent?: string;
+    autonomy?: string;
+    orchestratorModel?: string;
+    answers?: string[];
     configOverrides?: AgentConfigOverrides;
     maxCycles?: string;
     report?: boolean;
@@ -350,6 +395,33 @@ async function runDebugAgent(
   const maxCycles = parseInt(opts.maxCycles ?? "5", 10);
   if (Number.isNaN(maxCycles) || maxCycles < 1) {
     console.error(chalk.red("--max-cycles must be a positive integer"));
+    process.exit(1);
+  }
+
+  if (opts.runtime && !["acp", "flue"].includes(opts.runtime)) {
+    console.error(chalk.red(`Unknown --runtime "${opts.runtime}". Use: acp | flue`));
+    process.exit(1);
+  }
+  if (
+    opts.agent &&
+    !["cursor", "claude", "codex", "gemini", "custom"].includes(opts.agent)
+  ) {
+    console.error(
+      chalk.red(
+        `Unknown --agent "${opts.agent}". Use: cursor | claude | codex | gemini | custom`,
+      ),
+    );
+    process.exit(1);
+  }
+  if (
+    opts.autonomy &&
+    !["static", "guided", "autonomous"].includes(opts.autonomy)
+  ) {
+    console.error(
+      chalk.red(
+        `Unknown --autonomy "${opts.autonomy}". Use: static | guided | autonomous`,
+      ),
+    );
     process.exit(1);
   }
 
@@ -368,8 +440,28 @@ async function runDebugAgent(
     browserMcp:
       (opts.browserMcp as AgentConfigOverrides["browserMcp"] | undefined) ??
       opts.configOverrides?.browserMcp,
+    runtime:
+      (opts.runtime as AgentConfigOverrides["runtime"] | undefined) ??
+      opts.configOverrides?.runtime,
+    agentPreset:
+      (opts.agent as AgentConfigOverrides["agentPreset"] | undefined) ??
+      opts.configOverrides?.agentPreset,
+    autonomy:
+      (opts.autonomy as AgentConfigOverrides["autonomy"] | undefined) ??
+      opts.configOverrides?.autonomy,
+    orchestrator:
+      opts.orchestratorModel ?? opts.configOverrides?.orchestrator,
   };
   const agentConfig = resolveAgentConfig({ repoPath, overrides });
+
+  if (agentConfig.runtime === "flue") {
+    console.error(
+      chalk.red(
+        "The flue runtime is not available yet in this build. Use --runtime acp.",
+      ),
+    );
+    process.exit(1);
+  }
 
   console.log(chalk.bold("debug-agent (ACP + emulated Debug Mode)"));
   console.log(chalk.dim(`Repo: ${repoPath}`));
@@ -408,11 +500,31 @@ async function runDebugAgent(
       confirmPlan: opts.confirmPlan,
       resumeSessionId: opts.session?.trim() || undefined,
       resumeRunId: opts.resumeRunId,
+      answers: opts.answers,
       runLog,
       onPhase: () => {},
     });
 
     const result = await controller.run();
+
+    if (result.waitingOnUser) {
+      runLog.section("waiting_on_user");
+      runLog.close();
+      console.log(
+        chalk.yellow(
+          `\nRun ${result.ledger.runId} is paused — the debug loop needs your input:`,
+        ),
+      );
+      for (const q of result.ledger.pendingQuestions ?? []) {
+        console.log(chalk.cyan(`  ${q.id}: ${q.question}`));
+      }
+      console.log(
+        chalk.dim(
+          `\nAnswer and continue with:\n  debug resume ${repoPath} --run ${result.ledger.runId} --answer "..."`,
+        ),
+      );
+      process.exit(3);
+    }
     runLog.section("completed");
     runLog.line(`status=${result.ledger.status} runId=${result.ledger.runId}`);
     runLog.line(`sessionId=${result.ledger.sessionId}`);

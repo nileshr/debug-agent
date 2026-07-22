@@ -54,6 +54,36 @@ export const PhaseTimelineEntrySchema = z.object({
   error: z.string().optional(),
 });
 
+export const StepTimelineEntrySchema = z.object({
+  seq: z.number(),
+  stepId: z.string(),
+  attempt: z.number(),
+  startedAt: z.number().optional(),
+  endedAt: z.number().optional(),
+  dataSource: z.enum(["structured", "json_extraction", "none"]).optional(),
+  ok: z.boolean().optional(),
+  inserted: z.boolean().optional(),
+});
+
+export const DecisionTimelineEntrySchema = z.object({
+  seq: z.number(),
+  ts: z.number(),
+  afterStep: z.string(),
+  decidedBy: z.enum(["static", "heuristic", "llm", "user", "guardrail_override"]),
+  action: z.enum(["advance", "retry", "insert", "skip_to", "ask_user", "abort", "done"]),
+  nextStepId: z.string().optional(),
+  rationale: z.string().optional(),
+  overridden: z
+    .object({
+      action: z.string(),
+      nextStepId: z.string().optional(),
+      reason: z.string(),
+    })
+    .optional(),
+  modelId: z.string().optional(),
+  latencyMs: z.number().optional(),
+});
+
 export const FinalReportSchema = z.object({
   runId: z.string(),
   sessionId: z.string(),
@@ -63,7 +93,7 @@ export const FinalReportSchema = z.object({
   bugDescription: z.string(),
   status: z.enum(["fixed", "partial", "abandoned"]),
   runLifecycleStatus: z
-    .enum(["running", "interrupted", "completed", "failed"])
+    .enum(["running", "interrupted", "completed", "failed", "waiting_on_user"])
     .optional(),
   currentPhase: z.string().optional(),
   model: z.string(),
@@ -100,6 +130,8 @@ export const FinalReportSchema = z.object({
   trace: z.array(TraceEntrySchema).optional(),
   transcript: z.array(z.string()).optional(),
   phaseTimeline: z.array(PhaseTimelineEntrySchema).optional(),
+  stepTimeline: z.array(StepTimelineEntrySchema).optional(),
+  decisionTimeline: z.array(DecisionTimelineEntrySchema).optional(),
 });
 
 export type TraceKind = z.infer<typeof TraceKindSchema>;
@@ -123,9 +155,65 @@ export type Phase =
   | "apply_review"
   | "re_verify"
   | "summarize"
+  | "explore"
   | "done";
 
+/** Question surfaced to the user by an ask_user escalation. */
+export interface UserQuestion {
+  id: string;
+  question: string;
+}
+
+export interface UserAnswer {
+  questionId: string;
+  question: string;
+  answer: string;
+}
+
 export type VerifyMode = "cli" | "browser";
+
+/** One executed step (dynamic step list; replaces the fixed phase notion). */
+export interface StepExecutionRecord {
+  seq: number;
+  stepId: string;
+  attempt: number;
+  startedAt: number;
+  endedAt?: number;
+  dataSource?: "structured" | "json_extraction" | "none";
+  ok?: boolean;
+  inserted?: boolean;
+}
+
+export type DecisionAction =
+  | "advance"
+  | "retry"
+  | "insert"
+  | "skip_to"
+  | "ask_user"
+  | "abort"
+  | "done";
+
+export type DecisionMaker =
+  | "static"
+  | "heuristic"
+  | "llm"
+  | "user"
+  | "guardrail_override";
+
+/** Auditable record of one loop-control decision. */
+export interface DecisionRecord {
+  seq: number;
+  ts: number;
+  afterStep: string;
+  decidedBy: DecisionMaker;
+  action: DecisionAction;
+  nextStepId?: string;
+  rationale?: string;
+  /** Set when the engine vetoed an orchestrator decision. */
+  overridden?: { action: DecisionAction; nextStepId?: string; reason: string };
+  modelId?: string;
+  latencyMs?: number;
+}
 
 export interface RunLedger {
   runId: string;
@@ -161,4 +249,17 @@ export interface RunLedger {
   fixProposed?: string;
   summary?: RunSummary;
   status: "running" | "fixed" | "partial" | "abandoned";
+  /** v2 additions (absent on ledgers written by older builds). */
+  ledgerVersion?: number;
+  runtime?: "acp" | "flue";
+  agentPreset?: string;
+  autonomy?: "static" | "guided" | "autonomous";
+  stepHistory?: StepExecutionRecord[];
+  decisions?: DecisionRecord[];
+  /** Findings from inserted explore steps. */
+  exploreFindings?: string[];
+  /** Set while a run waits on user answers (exit code 3). */
+  pendingQuestions?: UserQuestion[];
+  /** Answers provided interactively or via `debug resume --answer`. */
+  userAnswers?: UserAnswer[];
 }

@@ -85,11 +85,14 @@ export function mergeConfigs(
 ): AgentConfig {
   if (!override) return { ...base, models: { ...base.models } };
   return AgentConfigSchema.parse({
-    version: 1,
+    version: 2,
     models: {
       ...base.models,
       ...(override.models ?? {}),
     },
     browserMcp: override.browserMcp ?? base.browserMcp,
+    runtime: override.runtime ?? base.runtime,
+    autonomy: override.autonomy ?? base.autonomy,
+    acp: override.acp ?? base.acp,
   });
 }

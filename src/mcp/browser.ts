@@ -76,6 +76,20 @@ export function acpMcpServersParam(): [] {
   return [];
 }
 
+/** Inline MCP server spec for runtimes that accept servers at session create. */
+export function browserMcpServerSpec(browserMcp: BrowserMcp): {
+  name: string;
+  command: string;
+  args: string[];
+} {
+  const entry = MCP_ENTRIES[browserMcp];
+  return {
+    name: MCP_SERVER_KEYS[browserMcp],
+    command: entry.command,
+    args: [...entry.args],
+  };
+}
+
 export function browserMcpLabel(browserMcp: BrowserMcp): string {
   return browserMcp === "playwright" ? "Playwright MCP" : "Chrome DevTools MCP";
 }

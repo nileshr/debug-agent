@@ -29,8 +29,33 @@ const PHASE_TEMPLATE_FILES: Partial<Record<Phase, string>> = {
   mark_fixed: "mark_fixed.md",
   review: "review.md",
   apply_review: "apply_review.md",
+  re_verify: "re_verify.md",
   summarize: "summarize.md",
+  explore: "explore.md",
 };
+
+/**
+ * Resolve any template stem (e.g. "orchestrate") through the same 3-tier
+ * override chain used for step prompts.
+ */
+export function resolveTemplateFile(
+  stem: string,
+  repoPath: string,
+): { text: string; source: string } | null {
+  const fileName = `${stem}.md`;
+  const candidates = [
+    { path: path.join(repoPromptsDir(repoPath), fileName), label: "repo" },
+    { path: path.join(USER_PROMPTS_DIR, fileName), label: "user" },
+    { path: path.join(bundledPromptsDir(), fileName), label: "bundled" },
+  ];
+  for (const c of candidates) {
+    const text = readIfExists(c.path);
+    if (text?.trim()) {
+      return { text, source: `${c.label}:${c.path}` };
+    }
+  }
+  return null;
+}
 
 function readIfExists(filePath: string): string | null {
   if (!fs.existsSync(filePath)) return null;

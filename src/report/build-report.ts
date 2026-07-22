@@ -113,5 +113,7 @@ export function buildFinalReportFromLedger(
     trace: ledger.trace,
     transcript: ledger.transcript.slice(-50),
     phaseTimeline: options.phaseTimeline,
+    stepTimeline: ledger.stepHistory?.length ? ledger.stepHistory : undefined,
+    decisionTimeline: ledger.decisions?.length ? ledger.decisions : undefined,
   });
 }

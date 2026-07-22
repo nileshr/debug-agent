@@ -81,15 +81,30 @@ export function resolveAgentConfig(
   if (global) merged = mergeConfigs(merged, global);
   if (repo) merged = mergeConfigs(merged, repo);
 
-  if (cli?.planner || cli?.fixer || cli?.reviewer || cli?.browserMcp) {
+  if (
+    cli?.planner ||
+    cli?.fixer ||
+    cli?.reviewer ||
+    cli?.orchestrator ||
+    cli?.browserMcp ||
+    cli?.runtime ||
+    cli?.autonomy ||
+    cli?.agentPreset
+  ) {
     merged = mergeConfigs(merged, {
-      version: 1,
+      version: 2,
       models: {
         planner: cli.planner ?? merged.models.planner,
         fixer: cli.fixer ?? merged.models.fixer,
         reviewer: cli.reviewer ?? merged.models.reviewer,
+        orchestrator: cli.orchestrator ?? merged.models.orchestrator,
       },
       browserMcp: cli.browserMcp ?? merged.browserMcp,
+      runtime: cli.runtime ?? merged.runtime,
+      autonomy: cli.autonomy ?? merged.autonomy,
+      acp: cli.agentPreset
+        ? { ...(merged.acp ?? { preset: "cursor" }), preset: cli.agentPreset }
+        : merged.acp,
     });
   }
 

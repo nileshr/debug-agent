@@ -2,6 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
 import { EventEmitter } from "node:events";
 import {
+  AcpPlanEntrySchema,
+  type AcpPlanEntry,
   type AcpClientEvent,
   type CursorAskQuestionParams,
   type CursorCreatePlanParams,
@@ -45,8 +47,12 @@ export interface AcpClientOptions {
   /** cwd for the `agent acp` child process (defaults to a safe writable directory) */
   spawnCwd?: string;
   permissionPolicy?: PermissionPolicyOptions;
+  /** Handle cursor/* extension methods (todos, plans, tasks, questions). Default true. */
+  cursorExtensions?: boolean;
   onStdoutChunk?: (text: string) => void;
   onTrace?: (event: TraceEvent) => void;
+  /** Standard ACP plan updates (session/update sessionUpdate: "plan"). */
+  onPlan?: (entries: AcpPlanEntry[]) => void;
 }
 
 export class AcpClient extends EventEmitter {
@@ -149,6 +155,24 @@ export class AcpClient extends EventEmitter {
       const text = update?.update?.content?.text;
       const sessionUpdate = update?.update?.sessionUpdate;
       const contentType = update?.update?.content?.type;
+
+      if (sessionUpdate === "plan") {
+        const rawEntries = (update?.update as { entries?: unknown[] })?.entries ?? [];
+        const entries: AcpPlanEntry[] = [];
+        for (const raw of rawEntries) {
+          const parsed = AcpPlanEntrySchema.safeParse(raw);
+          if (parsed.success) entries.push(parsed.data);
+        }
+        if (entries.length > 0) {
+          this.options.onPlan?.(entries);
+          const active = entries.find((e) => e.status === "in_progress");
+          const done = entries.filter((e) => e.status === "completed").length;
+          this.options.onTrace?.({
+            kind: "todo",
+            text: active ? active.content : `${done}/${entries.length} plan entries`,
+          });
+        }
+      }
       if (text) {
         this.options.onStdoutChunk?.(text);
         this.emit("stream", { text, sessionUpdate, contentType } satisfies StreamUpdate);
@@ -176,6 +200,13 @@ export class AcpClient extends EventEmitter {
         ? decidePermission(permParams, policy)
         : { outcome: "selected" as const, optionId: "allow-once" as const };
       this.respond(requestId, permissionResponse(requestId, decision).result);
+    }
+
+    if (method.startsWith("cursor/") && this.options.cursorExtensions === false) {
+      // Extensions disabled (non-Cursor preset): acknowledge requests
+      // generically so the agent never hangs, ignore notifications.
+      if (requestId != null) this.respond(requestId, {});
+      return;
     }
 
     if (method === "cursor/ask_question" && requestId != null) {
@@ -263,6 +294,11 @@ export class AcpClient extends EventEmitter {
     }
   }
 
+  /** authenticate that surfaces errors (on-demand auth negotiation). */
+  async authenticateStrict(methodId: string): Promise<void> {
+    await this.send("authenticate", { methodId });
+  }
+
   async sessionNew(params: {
     cwd: string;
     mcpServers?: McpServerDef[];
@@ -310,6 +346,16 @@ export class AcpClient extends EventEmitter {
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
     await this.setConfigOption({ sessionId, configId: "model", value: modelId });
+  }
+
+  /** Official ACP mode switch (agents other than Cursor). */
+  async setSessionMode(sessionId: string, modeId: string): Promise<void> {
+    await this.send("session/set_mode", { sessionId, modeId });
+  }
+
+  /** Official ACP model switch (UNSTABLE in the spec; gated by discovery). */
+  async setSessionModel(sessionId: string, modelId: string): Promise<void> {
+    await this.send("session/set_model", { sessionId, modelId });
   }
 
   onAskQuestion(handler: (params: CursorAskQuestionParams) => void): this {

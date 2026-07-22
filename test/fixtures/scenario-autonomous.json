@@ -1,0 +1,111 @@
+{
+  "personality": "cursor",
+  "rules": [
+    {
+      "match": "ORCHESTRATOR",
+      "chunks": [
+        "```json\n{\"action\":\"skip_to\",\"nextStepId\":\"summarize\",\"rationale\":\"Fix verified and instrumentation clean; finish early.\"}\n```\n"
+      ]
+    },
+    {
+      "match": "HYPOTHESIZE phase",
+      "todos": [
+        {
+          "id": "H1",
+          "content": "Off-by-one in pagination",
+          "status": "pending"
+        }
+      ],
+      "chunks": [
+        "Looking at the code...\n",
+        "```json\n{\"hypotheses\":[{\"id\":\"H1\",\"rank\":1,\"statement\":\"Off-by-one in pagination\",\"file\":\"src/buggy.js\",\"line\":3,\"status\":\"pending\"}]}\n```\n"
+      ]
+    },
+    {
+      "match": "INSTRUMENT phase",
+      "files": [
+        {
+          "op": "write",
+          "path": "src/buggy.js",
+          "content": "export function page(items, n) {\n  // DEBUG-INSTRUMENT:{{runId}}\n  return items.slice(0, n + 1);\n}\n"
+        }
+      ],
+      "chunks": [
+        "Added instrumentation.\n```json\n{\"filesTouched\":[\"src/buggy.js\"]}\n```\n"
+      ]
+    },
+    {
+      "match": "REPRODUCE phase",
+      "files": [
+        {
+          "op": "append",
+          "path": ".debug-agent/debug.log",
+          "content": "{\"hypothesis\":\"H1\",\"file\":\"src/buggy.js\",\"line\":3,\"value\":\"returned 3 items for n=2\",\"ts\":{{now}}}\n"
+        }
+      ],
+      "chunks": [
+        "Reproduced the bug.\n```json\n{\"steps\":[\"node repro.js\"],\"logCaptured\":true}\n```\n"
+      ]
+    },
+    {
+      "match": "ANALYZE phase",
+      "chunks": [
+        "The log confirms H1.\n```json\n{\"confirmedHypothesis\":\"H1\",\"fixProposal\":\"Use items.slice(0, n)\"}\n```\n"
+      ]
+    },
+    {
+      "match": "APPLY FIX phase",
+      "files": [
+        {
+          "op": "write",
+          "path": "src/buggy.js",
+          "content": "export function page(items, n) {\n  // DEBUG-INSTRUMENT:{{runId}}\n  return items.slice(0, n);\n}\n"
+        }
+      ],
+      "chunks": [
+        "Applied the fix.\n"
+      ]
+    },
+    {
+      "match": "VERIFY phase",
+      "chunks": [
+        "Re-ran the repro — passes.\n```json\n{\"verified\":true}\n```\n"
+      ]
+    },
+    {
+      "match": "MARK FIXED",
+      "files": [
+        {
+          "op": "write",
+          "path": "src/buggy.js",
+          "content": "export function page(items, n) {\n  return items.slice(0, n);\n}\n"
+        },
+        {
+          "op": "delete",
+          "path": ".debug-agent/debug.log"
+        }
+      ],
+      "chunks": [
+        "Removed instrumentation.\n```json\n{\"cleaned\":true}\n```\n"
+      ]
+    },
+    {
+      "match": "CODE REVIEW phase",
+      "chunks": [
+        "Clean minimal diff.\n```json\n{\"comments\":[]}\n```\n"
+      ]
+    },
+    {
+      "match": "APPLY REVIEW FIXES",
+      "chunks": [
+        "```json\n{\"addressed\":[]}\n```\n"
+      ]
+    },
+    {
+      "match": "FINAL SUMMARY",
+      "chunks": [
+        "```json\n{\"bugSummary\":\"Pagination returned one extra item\",\"rootCause\":\"slice(0, n + 1) off-by-one\",\"fixExplanation\":\"Changed to slice(0, n)\",\"risks\":[],\"followUps\":[]}\n```\n"
+      ]
+    }
+  ]
+}

@@ -1,11 +1,19 @@
-# Phase prompt templates
+# Step prompt templates
 
-These files are the default prompts injected for each debug-loop phase. You can override them without rebuilding debug-agent.
+These files are the default prompts injected for each debug-loop step. You can override them without rebuilding debug-agent.
+
+Beyond the classic steps there are three newer templates:
+
+- `re_verify.md` — post-review verification (defaults to the verify body)
+- `explore.md` — read-only investigation step the orchestrator can insert when
+  analysis is inconclusive (guided/autonomous autonomy)
+- `orchestrate.md` — the orchestrator's own decision prompt (used only when an
+  orchestrator model is configured)
 
 ## Override locations (first match wins)
 
-1. `<repo>/.debug-agent/prompts/<phase>.md` — per-repository
-2. `~/.debug-agent/prompts/<phase>.md` — global user override
+1. `<repo>/.debug-agent/prompts/<step>.md` — per-repository
+2. `~/.debug-agent/prompts/<step>.md` — global user override
 3. Bundled copy shipped with the package (`prompt-templates/`)
 
 ## Placeholders
