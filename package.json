@@ -1,6 +1,6 @@
 {
   "name": "debug-agent",
-  "version": "0.1.5",
+  "version": "0.2.0-alpha.1",
   "description": "debug-agent: ACP-driven debugger with emulated Cursor Debug Mode loop",
   "type": "module",
   "bin": {
@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "prepack": "npm run build",
+    "prepare": "npm run build",
     "prepublishOnly": "node scripts/no-npm-publish.mjs",
     "pack:tarball": "npm pack",
     "publish": "node scripts/publish.mjs",
